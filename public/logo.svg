@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Git Analyzer logo">
+  <rect width="128" height="128" rx="28" fill="#2563eb"/>
+  <path d="M36 36h56a12 12 0 0 1 12 12v32a12 12 0 0 1-12 12H36z" fill="#ffffff" opacity="0.95"/>
+  <path d="M48 48h32v12H48z" fill="#2563eb"/>
+  <path d="M48 68h24v12H48z" fill="#7c3aed"/>
+  <circle cx="92" cy="92" r="10" fill="#10b981"/>
+</svg>

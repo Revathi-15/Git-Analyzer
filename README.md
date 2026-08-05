@@ -11,14 +11,12 @@ An AI-powered GitHub repository explorer. Paste any public GitHub URL, browse th
 | AI / RAG | sentence-transformers (all-MiniLM-L6-v2), FAISS, LangChain, OpenRouter |
 | GitHub Data | GitHub REST API (via httpx) |
 
----
-
 ## Setup
 
 ### Prerequisites
 - Node.js 18+, Python 3.11+, npm, pip
 
-### 1 — Clone & install
+### 1. Clone & install
 
 ```bash
 git clone <repo-url>
@@ -34,7 +32,7 @@ python -m venv .venv
 pip install -r gitingest-api/requirements.txt
 ```
 
-### 2 — Configure environment variables
+### 2. Configure environment variables
 
 Create a `.env` file in the root:
 
@@ -43,7 +41,7 @@ OPENROUTER_API_KEY=sk-or-v1-...   # required — get free at openrouter.ai
 GITHUB_TOKEN=ghp_...              # recommended — github.com/settings/tokens
 ```
 
-### 3 — Run
+### 3. Run
 
 ```bash
 npm start
@@ -53,10 +51,8 @@ Opens both servers: **Vite :5173** (frontend) · **FastAPI :8001** (backend)
 
 Visit → `http://localhost:5173`
 
----
 
 ## How It Works
-
 1. Paste a GitHub URL → file tree loads instantly
 2. Click **Index Repo** → files are chunked, embedded, and indexed in FAISS
 3. Ask a question in chat → top-5 relevant code chunks retrieved → LLM answers with source citations
@@ -65,7 +61,6 @@ Visit → `http://localhost:5173`
 ### Demo
 https://github.com/user-attachments/assets/ca0011aa-8eab-4b49-86b4-880023b273dd
 
----
 
 ## Project Structure
 

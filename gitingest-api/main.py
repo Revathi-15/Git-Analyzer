@@ -273,8 +273,53 @@ async def fetch_via_github_api(username: str, repo: str) -> dict:
     full_content = "\n\n".join(content_parts)
     summary = f"{description} — {stars} stars | {len(blob_paths)} files fetched"
 
+    # Build nested file tree for the left panel (FileExplorer)
+    nested_files = _build_file_tree(items)
+
     logging.info(f"[GitHub API] Fetched {len(blob_paths)} files, {len(full_content)} chars for {username}/{repo}")
-    return {"summary": summary, "tree": tree_text, "content": full_content}
+    return {"summary": summary, "tree": tree_text, "content": full_content, "files": nested_files}
+
+
+def _build_file_tree(items: list) -> list:
+    """
+    Convert GitHub's flat tree list into a nested structure for the FileExplorer.
+    GitHub gives: [{ path: "src/App.tsx", type: "blob" }, ...]
+    We return:    [{ name, path, type, children? }, ...]
+    """
+    root: list = []
+    dir_map: dict = {}  # path → node dict
+
+    # Sort so parent directories always come before their children
+    sorted_items = sorted(items, key=lambda x: x.get("path", ""))
+
+    for item in sorted_items:
+        path = item.get("path", "")
+        if not path:
+            continue
+        parts = path.split("/")
+        name = parts[-1]
+        is_dir = item.get("type") == "tree"
+
+        node: dict = {
+            "name": name,
+            "path": path,
+            "type": "directory" if is_dir else "file",
+        }
+        if is_dir:
+            node["children"] = []
+
+        if len(parts) == 1:
+            root.append(node)
+        else:
+            parent_path = "/".join(parts[:-1])
+            parent = dir_map.get(parent_path)
+            if parent is not None:
+                parent["children"].append(node)
+
+        if is_dir:
+            dir_map[path] = node
+
+    return root
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -647,7 +692,7 @@ async def collect_repo_data(payload: dict) -> dict:
     try:
         # Use fast GitHub API — returns file tree in ~2s
         data = await fetch_via_github_api(username, repo)
-        return {"success": True, "data": {**data, "files": []}}
+        return {"success": True, "data": data}
     except Exception as exc:
         logging.warning(f"collect-repo-data failed: {exc} — returning fallback")
         return {

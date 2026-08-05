@@ -4,9 +4,11 @@ An AI-powered GitHub repository explorer. Paste any public GitHub URL, browse th
 
 ## Demo
 
-[![Demo Video](https://img.shields.io/badge/Watch%20Demo-▶%20MP4-blue?style=for-the-badge)](https://github.com/Revathi-15/Git-Analyzer/raw/main/Demo.mp4)
 
-> Click the badge above to watch the demo, or [download Demo.mp4](https://github.com/Revathi-15/Git-Analyzer/raw/main/Demo.mp4) directly.
+
+https://github.com/user-attachments/assets/ca0011aa-8eab-4b49-86b4-880023b273dd
+
+
 
 ---
 

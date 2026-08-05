@@ -2,16 +2,6 @@
 
 An AI-powered GitHub repository explorer. Paste any public GitHub URL, browse the codebase in a VS Code-style 3-panel layout, and chat with an AI that answers questions grounded in the actual source code using RAG (Retrieval-Augmented Generation).
 
-## Demo
-
-
-
-https://github.com/user-attachments/assets/ca0011aa-8eab-4b49-86b4-880023b273dd
-
-
-
----
-
 ## Tech Stack
 
 | Layer | Tech |
@@ -71,6 +61,9 @@ Visit → `http://localhost:5173`
 2. Click **Index Repo** → files are chunked, embedded, and indexed in FAISS
 3. Ask a question in chat → top-5 relevant code chunks retrieved → LLM answers with source citations
 4. Browse files with syntax highlighting (code, markdown, images, PDFs, Jupyter notebooks)
+   
+### Demo
+https://github.com/user-attachments/assets/ca0011aa-8eab-4b49-86b4-880023b273dd
 
 ---
 

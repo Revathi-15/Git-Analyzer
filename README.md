@@ -9,10 +9,9 @@ An AI-powered GitHub repository explorer. Paste any public GitHub URL, browse th
 | Layer | Tech |
 |---|---|
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, React Router v6 |
-| Node Backend | Express, Octokit (GitHub API), Redis (optional cache) |
-| Python Backend | FastAPI, sentence-transformers (all-MiniLM-L6-v2), FAISS, LangChain |
-| AI / LLM | OpenRouter (GPT, DeepSeek, Gemma, Mistral — free tier) |
-| Dev | concurrently, Python venv |
+| Backend | Python, FastAPI, Uvicorn |
+| AI / RAG | sentence-transformers (all-MiniLM-L6-v2), FAISS, LangChain, OpenRouter |
+| GitHub Data | GitHub REST API (via httpx) |
 
 ---
 
@@ -27,9 +26,8 @@ An AI-powered GitHub repository explorer. Paste any public GitHub URL, browse th
 git clone <repo-url>
 cd "Git Analyzer"
 
-# Node dependencies (frontend + server)
+# Node dependencies (frontend only)
 npm install
-cd server && npm install && cd ..
 
 # Python dependencies
 python -m venv .venv
@@ -40,13 +38,11 @@ pip install -r gitingest-api/requirements.txt
 
 ### 2 — Configure environment variables
 
-Create a `.env` file in the root (copy from `.env.example` if present):
+Create a `.env` file in the root:
 
 ```env
 OPENROUTER_API_KEY=sk-or-v1-...   # required — get free at openrouter.ai
 GITHUB_TOKEN=ghp_...              # recommended — github.com/settings/tokens
-GEMINI_API_KEY=...                # optional — legacy endpoint only
-REDIS_URL=redis://...             # optional — enables persistent caching
 ```
 
 ### 3 — Run
@@ -55,7 +51,7 @@ REDIS_URL=redis://...             # optional — enables persistent caching
 npm start
 ```
 
-Opens all 3 servers: **Vite :5173** · **Express :3001** · **FastAPI :8001**
+Opens both servers: **Vite :5173** (frontend) · **FastAPI :8001** (backend)
 
 Visit → `http://localhost:5173`
 
@@ -73,13 +69,12 @@ Visit → `http://localhost:5173`
 ## Project Structure
 
 ```
-├── src/                  # React frontend
-│   ├── pages/            # Home, RepoPage, UserProfile
-│   ├── components/       # AiChat, FileExplorer, FileViewer, CodeBlock, Loading
-│   └── lib/              # api.ts (all API calls), utils.ts
-├── server/               # Express backend — GitHub API proxy, Redis cache
-├── gitingest-api/        # FastAPI backend — RAG pipeline, streaming chat
-│   ├── main.py           # API endpoints
-│   └── rag.py            # Chunk → embed → FAISS → retrieve → prompt
-└── .env                  # API keys (never commit)
+├── src/                    # React frontend
+│   ├── pages/              # Home, RepoPage, UserProfile
+│   ├── components/         # AiChat, FileExplorer, FileViewer, CodeBlock, Loading
+│   └── lib/                # api.ts (all API calls), utils.ts
+├── gitingest-api/          # FastAPI backend — all API routes + RAG pipeline
+│   ├── main.py             # API endpoints (file tree, file content, chat, RAG)
+│   └── rag.py              # Chunk → embed → FAISS → retrieve → prompt
+└── .env                    # API keys (never commit)
 ```

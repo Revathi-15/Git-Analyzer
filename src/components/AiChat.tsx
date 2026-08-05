@@ -1,4 +1,4 @@
-import { askGemini, getRateLimit, ingestRepoForRAG, type RateLimitInfo } from '@/lib/api'
+import { askGeminiStream, getRateLimit, ingestRepoForRAG, type RateLimitInfo } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Code, FileQuestion, Lightbulb, Package, SendHorizontal, User, Database, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -71,28 +71,48 @@ function SourceCitation({ sources }: { sources: string[] }) {
   )
 }
 
-// ── Loading status with cycling steps ────────────────────────────────────────
-const LOADING_STEPS = [
-  'Reading repository...',
-  'Searching relevant code...',
-  'Building context...',
-  'Generating answer...',
-]
-
-function LoadingStatus() {
-  const [step, setStep] = useState(0)
-  useEffect(() => {
-    const id = setInterval(() => setStep(s => (s + 1) % LOADING_STEPS.length), 1800)
-    return () => clearInterval(id)
-  }, [])
+// ── Loading status showing real-time chunk search progress ───────────────────
+function LoadingStatus({ progressMsg, chunkFile, chunkHistory }: {
+  progressMsg: string
+  chunkFile?: string
+  chunkHistory: string[]
+}) {
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex gap-1">
-        {[0, 150, 300].map(d => (
-          <div key={d} className="h-1.5 w-1.5 bg-emerald-500/60 rounded-full animate-bounce" style={{ animationDelay: `${d}ms` }} />
-        ))}
+    <div className="flex flex-col gap-1.5 min-w-0">
+      {/* Main status line */}
+      <div className="flex items-center gap-2">
+        <div className="flex gap-1 shrink-0">
+          {[0, 150, 300].map(d => (
+            <div key={d} className="h-1.5 w-1.5 bg-emerald-500/60 rounded-full animate-bounce" style={{ animationDelay: `${d}ms` }} />
+          ))}
+        </div>
+        <span className="text-xs text-muted-foreground animate-pulse truncate">{progressMsg || 'Thinking...'}</span>
       </div>
-      <span className="text-xs text-muted-foreground animate-pulse">{LOADING_STEPS[step]}</span>
+
+      {/* Current chunk being read */}
+      {chunkFile && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] text-muted-foreground shrink-0">reading:</span>
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 truncate max-w-[220px]">
+            {chunkFile}
+          </span>
+        </div>
+      )}
+
+      {/* Mini trail of previously visited chunks */}
+      {chunkHistory.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-0.5">
+          {chunkHistory.map((f, i) => (
+            <span
+              key={i}
+              className="text-[9px] font-mono px-1 py-0.5 rounded bg-muted/60 text-muted-foreground border border-border/40 truncate max-w-[120px]"
+              title={f}
+            >
+              ✓ {f.split('/').pop()}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -111,11 +131,16 @@ export function AiChat({ username, repo, selectedFile }: Props) {
     content: `Hi! I'm your AI assistant for **${username}/${repo}**. Ask me anything, or click **Index repo** to enable RAG-powered answers grounded in the actual source code.`,
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
   }])
-  const [input, setInput]           = useState('')
-  const [loading, setLoading]       = useState(false)
-  const [rateLimit, setRateLimit]   = useState<RateLimitInfo | null>(null)
-  const [ragState, setRagState]     = useState<RAGState>('idle')
-  const [chunksCount, setChunksCount] = useState(0)
+  const [input, setInput]               = useState('')
+  const [loading, setLoading]           = useState(false)
+  const [rateLimit, setRateLimit]       = useState<RateLimitInfo | null>(null)
+  const [ragState, setRagState]         = useState<RAGState>('idle')
+  const [chunksCount, setChunksCount]   = useState(0)
+  const [progressMsg, setProgressMsg]   = useState('Thinking...')
+  const [progressFile, setProgressFile] = useState<string | undefined>(undefined)
+  const [chunkHistory, setChunkHistory] = useState<string[]>([])
+  const [streaming, setStreaming]       = useState(false)  // true from send → until done/error/abort
+  const streamCtrlRef = useRef<AbortController | null>(null)
   const bottomRef  = useRef<HTMLDivElement>(null)
   const inputRef   = useRef<HTMLTextAreaElement>(null)
 
@@ -167,54 +192,91 @@ export function AiChat({ username, repo, selectedFile }: Props) {
 
   // ── Send a message ──────────────────────────────────────────────────────────
   const send = useCallback(async (text: string) => {
-    if (!text.trim() || loading) return
+    if (!text.trim() || streaming) return
     const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
     setMessages(prev => [...prev, { role: 'user', content: text, timestamp: ts }])
     setInput('')
     setLoading(true)
+    setStreaming(true)
+    setProgressMsg('Connecting...')
+    setProgressFile(undefined)
+    setChunkHistory([])
 
-    try {
-      const data = await askGemini({
+    // Placeholder index for the streaming assistant message
+    let assistantIdx = -1
+    let accumulated = ''
+    let streamingStarted = false
+
+    // Cancel any previous stream
+    streamCtrlRef.current?.abort()
+
+    const ctrl = askGeminiStream(
+      {
         username,
         repo,
         query: text,
         filePath: selectedFile,
         history: messages.map(m => ({ role: m.role, content: m.content })),
-      })
-
-      if (data.rateLimited) {
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: `⚠️ ${data.error}`,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        }])
-        if (data.rateLimit) setRateLimit(data.rateLimit)
-        return
+      },
+      {
+        onProgress(msg, chunkFile) {
+          setProgressMsg(msg)
+          if (chunkFile) {
+            setProgressFile(chunkFile)
+            setChunkHistory(h => {
+              const short = chunkFile.split('/').pop() ?? chunkFile
+              // avoid duplicates — keep a running list of visited files
+              return h.includes(short) ? h : [...h, short]
+            })
+          } else {
+            setProgressFile(undefined)
+          }
+        },
+        onToken(token) {
+          accumulated += token
+          if (assistantIdx === -1) {
+            // First token — hide the loading bubble, add assistant message
+            streamingStarted = true
+            setLoading(false)
+            setMessages(prev => {
+              assistantIdx = prev.length
+              return [...prev, {
+                role: 'assistant',
+                content: accumulated,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              }]
+            })
+          } else {
+            setMessages(prev => prev.map((m, i) =>
+              i === assistantIdx ? { ...m, content: accumulated } : m
+            ))
+          }
+        },
+        onDone(sources, rl) {
+          setMessages(prev => prev.map((m, i) =>
+            i === assistantIdx ? { ...m, sources } : m
+          ))
+          setRateLimit(rl)
+          setLoading(false)
+          setStreaming(false)
+        },
+        onError(msg, rateLimited, rl) {
+          if (!streamingStarted) {
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: `⚠️ ${msg}`,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            }])
+          }
+          if (rl) setRateLimit(rl)
+          setLoading(false)
+          setStreaming(false)
+        },
       }
-
-      if (!data.success) throw new Error(data.error)
-
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: data.response || 'No response.',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        sources: data.sources ?? [],
-      }])
-
-      if (data.rateLimit) setRateLimit(data.rateLimit)
-
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Request failed'
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: `⚠️ ${msg}`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      }])
-    } finally {
-      setLoading(false)
-    }
-  }, [loading, messages, username, repo, selectedFile])
+    )
+    streamCtrlRef.current = ctrl
+  }, [streaming, messages, username, repo, selectedFile])
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(input) }
@@ -329,7 +391,7 @@ export function AiChat({ username, repo, selectedFile }: Props) {
                 <img src="/logo.svg" alt="AI" className="w-4 h-4" />
               </div>
               <div className="bg-muted border border-border rounded-2xl rounded-tl-sm px-4 py-3">
-                <LoadingStatus />
+                <LoadingStatus progressMsg={progressMsg} chunkFile={progressFile} chunkHistory={chunkHistory} />
               </div>
             </div>
           )}
@@ -361,19 +423,37 @@ export function AiChat({ username, repo, selectedFile }: Props) {
             onKeyDown={onKeyDown}
             placeholder={ragState === 'ready' ? 'Ask about this codebase (RAG-powered)...' : 'Ask about this repository...'}
             rows={1}
-            disabled={loading}
+            disabled={false}
             className="flex-1 min-h-[40px] max-h-[160px] resize-none bg-transparent border-none outline-none text-sm text-foreground placeholder:text-muted-foreground py-2 px-2"
           />
-          <button
-            onClick={() => send(input)}
-            disabled={loading || !input.trim()}
-            className={cn(
-              'h-10 w-10 rounded-lg flex items-center justify-center transition-all shrink-0',
-              input.trim() ? 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-md' : 'bg-muted/50 text-muted-foreground'
-            )}
-          >
-            <SendHorizontal className="h-4 w-4" />
-          </button>
+          {streaming ? (
+            /* Stop button — shown for the entire generation (loading + token streaming) */
+            <button
+              onClick={() => {
+                streamCtrlRef.current?.abort()
+                setLoading(false)
+                setStreaming(false)
+              }}
+              title="Stop generating"
+              className="h-10 w-10 rounded-full bg-white flex items-center justify-center shrink-0 shadow-md hover:bg-white/90 transition-all"
+            >
+              <span className="h-3.5 w-3.5 rounded-sm bg-black block" />
+            </button>
+          ) : (
+            /* Send button — shown when idle */
+            <button
+              onClick={() => send(input)}
+              disabled={!input.trim()}
+              className={cn(
+                'h-10 w-10 rounded-full flex items-center justify-center transition-all shrink-0',
+                input.trim()
+                  ? 'bg-white text-black hover:bg-white/90 shadow-md'
+                  : 'bg-muted/50 text-muted-foreground cursor-not-allowed'
+              )}
+            >
+              <SendHorizontal className="h-4 w-4" />
+            </button>
+          )}
         </div>
         <p className="text-[10px] text-muted-foreground text-center mt-2">
           {ragState === 'ready'

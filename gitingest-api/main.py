@@ -16,6 +16,7 @@ Endpoints:
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -24,7 +25,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 
 from gitingest import ingest_async
@@ -56,7 +57,17 @@ RATE_WINDOW  = 24 * 60 * 60  # 24 hours in seconds
 
 _rate_store: dict[str, dict] = {}  # { ip: { count, reset_at } }
 
+def _normalize_ip(ip: str) -> str:
+    """Normalise IPv6 loopback (::1) and IPv4-mapped (::ffff:127.0.0.1) to '127.0.0.1'
+    so that all local requests share the same rate-limit bucket."""
+    if ip in ("::1", "::ffff:127.0.0.1", "0:0:0:0:0:0:0:1"):
+        return "127.0.0.1"
+    if ip.startswith("::ffff:"):
+        return ip[7:]
+    return ip
+
 def _get_rate_data(ip: str) -> dict:
+    ip = _normalize_ip(ip)
     now = time.time()
     entry = _rate_store.get(ip)
     if not entry or now > entry["reset_at"]:
@@ -64,6 +75,7 @@ def _get_rate_data(ip: str) -> dict:
     return _rate_store[ip]
 
 def check_rate_limit(ip: str) -> dict:
+    ip = _normalize_ip(ip)
     entry = _get_rate_data(ip)
     remaining = max(0, RATE_LIMIT - entry["count"])
     return {
@@ -74,6 +86,7 @@ def check_rate_limit(ip: str) -> dict:
     }
 
 def increment_rate(ip: str) -> None:
+    ip = _normalize_ip(ip)
     entry = _get_rate_data(ip)
     entry["count"] += 1
 
@@ -343,7 +356,7 @@ async def ingest_rag(req: IngestRAGRequest) -> dict:
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest, request: Request) -> dict:
-    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown").split(",")[0].strip()
+    ip = _normalize_ip(request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown").split(",")[0].strip())
     rl = check_rate_limit(ip)
     if not rl["allowed"]:
         return {
@@ -387,17 +400,15 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                 f"Note: Code context is not available — answer from general knowledge."
             )
             response_text = await call_gemini(prompt)
+            # Count this fallback request too
+            increment_rate(ip)
+            rl = check_rate_limit(ip)
             return {
                 "success": True,
                 "response": response_text,
                 "sources": [],
                 "rag_used": False,
-                "rateLimit": {
-                    "allowed": True,
-                    "remaining": 100,
-                    "limit": 100,
-                    "resetAt": int(time.time()) + 3600,
-                },
+                "rateLimit": rl,
             }
 
     # Build RAG prompt: retrieve top-k chunks + assemble context
@@ -431,6 +442,171 @@ async def chat(req: ChatRequest, request: Request) -> dict:
         "rag_used": True,
         "rateLimit": rl,
     }
+
+
+
+
+# ── Streaming chat endpoint ──────────────────────────────────────────────────
+
+def _sse(data: dict) -> str:
+    """Format a dict as a Server-Sent Event line."""
+    return f"data: {json.dumps(data)}\n\n"
+
+
+@app.post("/api/chat-stream")
+async def chat_stream(req: ChatRequest, request: Request):
+    """
+    Streaming version of /api/chat using Server-Sent Events (SSE).
+    Emits:
+      {"type":"progress","message":"...","chunk_file":"..."}  — search progress
+      {"type":"token","text":"..."}                            — LLM token
+      {"type":"done","sources":[...],"rateLimit":{...}}        — finished
+      {"type":"error","message":"..."}                         — error
+    """
+    raw_ip = request.headers.get(
+        "x-forwarded-for", request.client.host if request.client else "unknown"
+    ).split(",")[0].strip()
+    ip = _normalize_ip(raw_ip)
+    rl = check_rate_limit(ip)
+
+    async def event_stream():
+        # 1. Rate limit check
+        if not rl["allowed"]:
+            yield _sse({"type": "error", "rateLimited": True,
+                        "message": f"Daily limit of {RATE_LIMIT} requests reached. "
+                                   f"Resets in {int((rl['resetAt'] - time.time()) / 3600)}h.",
+                        "rateLimit": rl})
+            return
+
+        repo_key = f"{req.username}/{req.repo}"
+
+        # 2. Get or build pipeline
+        pipeline = get_cached_pipeline(repo_key)
+        if pipeline is None:
+            yield _sse({"type": "progress", "message": "Indexing repository (first time)..."})
+            try:
+                ingest_data = await fetch_via_github_api(req.username, req.repo)
+                pipeline = await build_rag_pipeline(
+                    repo_key=repo_key,
+                    raw_content=ingest_data["content"],
+                    tree=ingest_data["tree"],
+                    summary=ingest_data["summary"],
+                )
+            except Exception as exc:
+                yield _sse({"type": "error", "message": f"Failed to index repo: {exc}"})
+                return
+
+        # 3. Retrieve chunks with per-chunk progress events
+        total_chunks = len(pipeline.chunks)
+        top_k = req.top_k
+        yield _sse({"type": "progress", "message": f"Searching through {total_chunks} chunks..."})
+
+        def _retrieve():
+            return pipeline.retrieve(req.query, top_k=top_k)
+
+        retrieved_chunks = await asyncio.to_thread(_retrieve)
+        total_retrieved = len(retrieved_chunks)
+
+        for i, chunk in enumerate(retrieved_chunks, 1):
+            short_path = chunk.file_path.split("/")[-1] if "/" in chunk.file_path else chunk.file_path
+            yield _sse({
+                "type": "progress",
+                "message": f"Reading chunk {i}/{total_retrieved} — {short_path}",
+                "chunk_file": chunk.file_path,
+                "chunk_index": chunk.chunk_index,
+            })
+            await asyncio.sleep(0.05)  # small delay so UI can render each step
+
+        # 4. Build grounded prompt
+        yield _sse({"type": "progress", "message": "Assembling context, querying AI..."})
+        grounded_prompt = pipeline.build_prompt(req.query, retrieved_chunks, req.history)
+
+        # 5. Stream LLM tokens from OpenRouter
+        if not OPENROUTER_API_KEY:
+            yield _sse({"type": "error", "message": "OPENROUTER_API_KEY is not set."})
+            return
+
+        # Models ordered by speed. connect_timeout is short so a dead model is
+        # skipped fast; read_timeout is generous for the actual token stream.
+        models_to_try = [
+            "openai/gpt-oss-20b:free",
+            "deepseek/deepseek-r1-0528:free",
+            "google/gemma-3-27b-it:free",
+            "mistralai/mistral-7b-instruct:free",
+        ]
+
+        streamed_ok = False
+        for model in models_to_try:
+            yield _sse({"type": "progress", "message": f"Connecting to {model.split('/')[1].split(':')[0]}..."})
+            try:
+                timeout = httpx.Timeout(connect=8.0, read=60.0, write=10.0, pool=5.0)
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream(
+                        "POST",
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                            "Content-Type": "application/json",
+                            "HTTP-Referer": "https://github.com/git-analyzer",
+                            "X-Title": "Git Analyzer",
+                        },
+                        json={
+                            "model": model,
+                            "messages": [{"role": "user", "content": grounded_prompt}],
+                            "max_tokens": 1024,
+                            "temperature": 0.3,
+                            "stream": True,
+                        },
+                    ) as resp:
+                        if resp.status_code in (404, 429):
+                            logging.warning(f"[Stream] {model} unavailable ({resp.status_code}), trying next...")
+                            continue
+                        if resp.status_code != 200:
+                            body = await resp.aread()
+                            logging.warning(f"[Stream] {model} error {resp.status_code}, trying next...")
+                            continue  # try next model instead of hard-failing
+
+                        async for line in resp.aiter_lines():
+                            if not line.startswith("data:"):
+                                continue
+                            payload_str = line[5:].strip()
+                            if payload_str == "[DONE]":
+                                break
+                            try:
+                                chunk_data = json.loads(payload_str)
+                                delta = chunk_data["choices"][0]["delta"]
+                                token = delta.get("content", "")
+                                if token:
+                                    yield _sse({"type": "token", "text": token})
+                            except Exception:
+                                continue
+
+                        streamed_ok = True
+                        break
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout):
+                logging.warning(f"[Stream] {model} timed out, trying next...")
+                continue
+            except Exception as exc:
+                logging.exception(f"[Stream] Unexpected error with {model}")
+                yield _sse({"type": "error", "message": str(exc)})
+                return
+
+        if not streamed_ok:
+            yield _sse({"type": "error",
+                        "message": "All free models are currently unavailable. Try again in a moment."})
+            return
+
+        # 6. Count request and emit done
+        increment_rate(ip)
+        rl_final = check_rate_limit(ip)
+        sources = list(dict.fromkeys(c.file_path for c in retrieved_chunks))
+        yield _sse({"type": "done", "sources": sources, "rateLimit": rl_final})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/rag-status")
@@ -533,11 +709,21 @@ async def get_file_content(username: str, repo: str, path: str) -> dict:
 
 
 @app.post("/api/gemini")
-async def gemini_legacy(payload: dict) -> dict:
+async def gemini_legacy(payload: dict, request: Request) -> dict:
     """
     Legacy endpoint — kept for backwards compatibility with the Express proxy.
     For new code, use POST /api/chat instead (RAG-powered).
     """
+    ip = _normalize_ip(request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown").split(",")[0].strip())
+    rl = check_rate_limit(ip)
+    if not rl["allowed"]:
+        return {
+            "success": False,
+            "rateLimited": True,
+            "error": f"Daily limit of {RATE_LIMIT} requests reached.",
+            "rateLimit": rl,
+        }
+
     query = payload.get("query", "") or "this repository"
     username = payload.get("username", "")
     repo = payload.get("repo", "")
@@ -559,21 +745,19 @@ async def gemini_legacy(payload: dict) -> dict:
         except (ValueError, Exception) as e:
             return {"success": False, "error": str(e), "rateLimited": False}
 
+    increment_rate(ip)
+    rl = check_rate_limit(ip)
+
     return {
         "success": True,
         "response": text,
-        "rateLimit": {
-            "allowed": True,
-            "remaining": 100,
-            "limit": 100,
-            "resetAt": int(time.time()) + 3600,
-        },
+        "rateLimit": rl,
     }
 
 
 @app.get("/api/rate-limit")
 async def rate_limit(request: Request) -> dict:
-    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown").split(",")[0].strip()
+    ip = _normalize_ip(request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown").split(",")[0].strip())
     rl = check_rate_limit(ip)
     return {"success": True, **rl}
 

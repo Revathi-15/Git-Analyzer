@@ -161,3 +161,107 @@ export async function getRAGStatus(
   )
   return res.json()
 }
+
+// ── SSE streaming types ───────────────────────────────────────────────────────
+
+export type StreamEvent =
+  | { type: 'progress'; message: string; chunk_file?: string; chunk_index?: number }
+  | { type: 'token'; text: string }
+  | { type: 'done'; sources: string[]; rateLimit: RateLimitInfo }
+  | { type: 'error'; message: string; rateLimited?: boolean; rateLimit?: RateLimitInfo }
+
+export interface StreamCallbacks {
+  onProgress?: (msg: string, chunkFile?: string) => void
+  onToken?: (text: string) => void
+  onDone?: (sources: string[], rateLimit: RateLimitInfo) => void
+  onError?: (msg: string, rateLimited?: boolean, rateLimit?: RateLimitInfo) => void
+}
+
+/**
+ * Streaming RAG chat via SSE.
+ * Calls /api/chat-stream and fires callbacks as events arrive.
+ * Returns an AbortController so the caller can cancel mid-stream.
+ */
+export function askGeminiStream(
+  params: {
+    username: string
+    repo: string
+    query: string
+    filePath?: string | null
+    history?: { role: string; content: string }[]
+  },
+  callbacks: StreamCallbacks
+): AbortController {
+  const ctrl = new AbortController()
+
+  ;(async () => {
+    let res: Response
+    try {
+      res = await fetch(`${BASE}/chat-stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: params.username,
+          repo: params.repo,
+          query: params.query,
+          history: params.history ?? [],
+          top_k: 5,
+        }),
+        signal: ctrl.signal,
+      })
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') callbacks.onError?.('Network error: ' + e?.message)
+      return
+    }
+
+    if (!res.ok || !res.body) {
+      callbacks.onError?.(`HTTP ${res.status}`)
+      return
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      let done: boolean, value: Uint8Array | undefined
+      try {
+        ;({ done, value } = await reader.read())
+      } catch {
+        break
+      }
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''  // keep incomplete last line
+
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue
+        const raw = line.slice(5).trim()
+        if (!raw) continue
+        try {
+          const event: StreamEvent = JSON.parse(raw)
+          switch (event.type) {
+            case 'progress':
+              callbacks.onProgress?.(event.message, event.chunk_file)
+              break
+            case 'token':
+              callbacks.onToken?.(event.text)
+              break
+            case 'done':
+              callbacks.onDone?.(event.sources, event.rateLimit)
+              break
+            case 'error':
+              callbacks.onError?.(event.message, event.rateLimited, event.rateLimit)
+              break
+          }
+        } catch {
+          // skip malformed line
+        }
+      }
+    }
+  })()
+
+  return ctrl
+}

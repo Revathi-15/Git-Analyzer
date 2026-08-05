@@ -2,6 +2,12 @@
 
 An AI-powered GitHub repository explorer. Paste any public GitHub URL, browse the codebase in a VS Code-style 3-panel layout, and chat with an AI that answers questions grounded in the actual source code using RAG (Retrieval-Augmented Generation).
 
+## Demo
+
+[![Demo Video](https://img.shields.io/badge/Watch%20Demo-▶%20MP4-blue?style=for-the-badge)](https://github.com/Revathi-15/Git-Analyzer/raw/main/Demo.mp4)
+
+> Click the badge above to watch the demo, or [download Demo.mp4](https://github.com/Revathi-15/Git-Analyzer/raw/main/Demo.mp4) directly.
+
 ---
 
 ## Tech Stack

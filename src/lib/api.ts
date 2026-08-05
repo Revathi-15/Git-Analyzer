@@ -1,5 +1,7 @@
 const BASE = '/api'
 
+// ── Shared types ──────────────────────────────────────────────────────────────
+
 export interface RepoData {
   summary: string
   tree: string
@@ -24,12 +26,34 @@ export interface RateLimitInfo {
 export interface GeminiResponse {
   success: boolean
   response?: string
+  sources?: string[]      // file paths RAG retrieved to answer the question
+  rag_used?: boolean      // whether RAG pipeline was used
   rateLimit?: RateLimitInfo
   rateLimited?: boolean
   error?: string
 }
 
-// Collect / refresh repo data via GitIngest
+export interface RAGIngestResponse {
+  success: boolean
+  repo_key?: string
+  chunks_count?: number
+  files_count?: number
+  cached?: boolean
+  message?: string
+  error?: string
+}
+
+export interface RAGStatusResponse {
+  indexed: boolean
+  repo_key: string
+  chunks_count?: number
+  files_count?: number
+  age_seconds?: number
+}
+
+// ── Existing API calls (unchanged) ───────────────────────────────────────────
+
+/** Collect repo file tree via Express → GitHub API */
 export async function collectRepoData(
   username: string,
   repo: string,
@@ -43,7 +67,7 @@ export async function collectRepoData(
   return res.json()
 }
 
-// Fetch a single file's content
+/** Fetch a single file's content */
 export async function fetchFileContent(
   username: string,
   repo: string,
@@ -59,30 +83,13 @@ export async function fetchFileContent(
   return res.json()
 }
 
-// Send a chat message to Gemini
-export async function askGemini(params: {
-  username: string
-  repo: string
-  query: string
-  filePath?: string | null
-  fetchOnlyCurrentFile?: boolean
-  history?: { role: string; content: string }[]
-}): Promise<GeminiResponse> {
-  const res = await fetch(`${BASE}/gemini`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  })
-  return res.json()
-}
-
-// Check current rate limit status
+/** Check current rate limit status */
 export async function getRateLimit(): Promise<{ success: boolean } & RateLimitInfo> {
   const res = await fetch(`${BASE}/rate-limit`)
   return res.json()
 }
 
-// Fetch GitHub user profile + repos directly (public API, no secret needed)
+/** Fetch GitHub user profile + repos (public GitHub API, no secret needed) */
 export async function fetchGitHubUser(username: string) {
   const [profileRes, reposRes] = await Promise.all([
     fetch(`https://api.github.com/users/${username}`),
@@ -93,4 +100,64 @@ export async function fetchGitHubUser(username: string) {
     profile: await profileRes.json(),
     repos: await reposRes.json(),
   }
+}
+
+// ── NEW: RAG API calls ────────────────────────────────────────────────────────
+
+/**
+ * Step 1 — Ingest a repository into the RAG pipeline.
+ * Clones repo via GitIngest → chunks → embeds → builds FAISS index.
+ * Call this once when the RepoPage loads, then use askGemini() for chat.
+ */
+export async function ingestRepoForRAG(
+  username: string,
+  repo: string,
+  force = false
+): Promise<RAGIngestResponse> {
+  const res = await fetch(`${BASE}/ingest-rag`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, repo, force }),
+  })
+  return res.json()
+}
+
+/**
+ * Step 2 — RAG-powered chat.
+ * Embeds the query → FAISS retrieval → grounded Gemini answer.
+ * Returns response + sources (which files were used to answer).
+ */
+export async function askGemini(params: {
+  username: string
+  repo: string
+  query: string
+  filePath?: string | null
+  fetchOnlyCurrentFile?: boolean
+  history?: { role: string; content: string }[]
+}): Promise<GeminiResponse> {
+  const res = await fetch(`${BASE}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: params.username,
+      repo: params.repo,
+      query: params.query,
+      history: params.history ?? [],
+      top_k: 5,
+    }),
+  })
+  return res.json()
+}
+
+/**
+ * Check whether a repo's RAG index is already built in the backend cache.
+ */
+export async function getRAGStatus(
+  username: string,
+  repo: string
+): Promise<RAGStatusResponse> {
+  const res = await fetch(
+    `${BASE}/rag-status?username=${encodeURIComponent(username)}&repo=${encodeURIComponent(repo)}`
+  )
+  return res.json()
 }

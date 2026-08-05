@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "server": "node server/index.js",
-    "start": "concurrently \"npm run dev\" \"npm run server\""
+    "python": ".venv\\Scripts\\python.exe -m uvicorn main:app --port 8001 --reload --app-dir gitingest-api",
+    "start": "concurrently \"npm run dev\" \"npm run server\" \"npm run python\""
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.0",

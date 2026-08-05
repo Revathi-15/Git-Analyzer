@@ -2,8 +2,9 @@ import { AiChat } from '@/components/AiChat'
 import { FileExplorer } from '@/components/FileExplorer'
 import { FileViewer } from '@/components/FileViewer'
 import { collectRepoData, type RepoData } from '@/lib/api'
-import { useCallback, useEffect, useState } from 'react'
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 
 export default function RepoPage() {
@@ -12,8 +13,13 @@ export default function RepoPage() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [repoData, setRepoData] = useState<RepoData | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [leftOpen, setLeftOpen] = useState(true)
+  const [rightOpen, setRightOpen] = useState(true)
+
+  const leftPanelRef  = useRef<ImperativePanelHandle>(null)
+  const rightPanelRef = useRef<ImperativePanelHandle>(null)
 
   const fallbackRepoData = (user: string, project: string): RepoData => ({
     summary: `Preview available for ${user}/${project}.`,
@@ -30,66 +36,142 @@ export default function RepoPage() {
 
   useEffect(() => {
     if (!username || !repo) return
-
     setError(null)
-    setRepoData(fallbackRepoData(username, repo))
+    setLoading(true)
 
     collectRepoData(username, repo, false)
       .then(res => {
-        if (!res.success || !res.data) throw new Error(res.error || 'Failed to load repository')
+        if (!res.success || !res.data) throw new Error(res.error || 'Failed to load')
         setRepoData(res.data)
       })
-      .catch(() => undefined)
+      .catch(() => setRepoData(fallbackRepoData(username, repo)))
+      .finally(() => setLoading(false))
   }, [username, repo])
 
-  if (!repoData || !username || !repo) {
+  const toggleLeft = () => {
+    if (leftOpen) {
+      leftPanelRef.current?.collapse()
+      setLeftOpen(false)
+    } else {
+      leftPanelRef.current?.expand()
+      setLeftOpen(true)
+    }
+  }
+
+  const toggleRight = () => {
+    if (rightOpen) {
+      rightPanelRef.current?.collapse()
+      setRightOpen(false)
+    } else {
+      rightPanelRef.current?.expand()
+      setRightOpen(true)
+    }
+  }
+
+  if (!username || !repo) {
     return (
       <div className="h-screen bg-background flex flex-col items-center justify-center gap-4 text-muted-foreground">
         <p>{error || 'Repository not found'}</p>
-        <button
-          onClick={() => navigate('/')}
-          className="px-4 py-2 rounded-lg bg-muted hover:bg-accent text-sm transition-colors"
-        >
+        <button onClick={() => navigate('/')} className="px-4 py-2 rounded-lg bg-muted hover:bg-accent text-sm transition-colors">
           ← Go home
         </button>
       </div>
     )
   }
 
+  const repoDataToUse = repoData || fallbackRepoData(username, repo)
+
   return (
-    <div className="h-screen bg-background overflow-hidden">
-      <PanelGroup direction="horizontal" className="h-full">
-        {/* Left — File Explorer */}
-        <Panel defaultSize={20} minSize={14} maxSize={30} collapsible>
-          <div className="h-full border-r border-border overflow-hidden">
-            <FileExplorer
-              files={repoData.files}
-              username={username}
-              repo={repo}
-              selectedPath={selectedFile}
-              onFileSelect={selectFile}
-            />
-          </div>
-        </Panel>
+    <div className="h-screen bg-background overflow-hidden flex flex-col">
 
-        <PanelResizeHandle className="w-1 bg-border hover:bg-emerald-500/40 transition-colors" />
+      {/* Top bar with toggle buttons */}
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border shrink-0 bg-background">
+        {/* Left toggle */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={toggleLeft}
+            title={leftOpen ? 'Close file explorer' : 'Open file explorer'}
+            className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {leftOpen
+              ? <PanelLeftClose className="h-4 w-4" />
+              : <PanelLeftOpen className="h-4 w-4" />}
+          </button>
+          <span className="text-sm text-muted-foreground font-medium">
+            {loading ? (
+              <span className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse inline-block" />
+                Loading {username}/{repo}...
+              </span>
+            ) : (
+              <span>{username} / <span className="text-foreground font-semibold">{repo}</span></span>
+            )}
+          </span>
+        </div>
 
-        {/* Middle — File Viewer */}
-        <Panel defaultSize={50} minSize={30}>
-          <div className="h-full overflow-hidden">
-            <FileViewer username={username} repo={repo} filePath={selectedFile} />
-          </div>
-        </Panel>
+        {/* Right toggle */}
+        <button
+          onClick={toggleRight}
+          title={rightOpen ? 'Close AI chat' : 'Open AI chat'}
+          className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+        >
+          {rightOpen
+            ? <PanelRightClose className="h-4 w-4" />
+            : <PanelRightOpen className="h-4 w-4" />}
+        </button>
+      </div>
 
-        <PanelResizeHandle className="w-1 bg-border hover:bg-emerald-500/40 transition-colors" />
+      {/* 3-panel layout */}
+      <div className="flex-1 overflow-hidden">
+        <PanelGroup direction="horizontal" className="h-full">
 
-        {/* Right — AI Chat */}
-        <Panel defaultSize={30} minSize={20} maxSize={50} collapsible>
-          <div className="h-full overflow-hidden">
-            <AiChat username={username} repo={repo} selectedFile={selectedFile} />
-          </div>
-        </Panel>
-      </PanelGroup>
+          {/* Left — File Explorer */}
+          <Panel ref={leftPanelRef} defaultSize={20} minSize={14} maxSize={35} collapsible
+            onCollapse={() => setLeftOpen(false)} onExpand={() => setLeftOpen(true)}>
+            <div className="h-full border-r border-border overflow-hidden">
+              {loading ? (
+                <div className="flex flex-col gap-2 p-3">
+                  {/* Skeleton loader */}
+                  {Array.from({ length: 8 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <div className="h-3.5 w-3.5 rounded bg-muted animate-pulse" />
+                      <div className="h-3 rounded bg-muted animate-pulse" style={{ width: `${40 + (i % 4) * 15}%` }} />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <FileExplorer
+                  files={repoDataToUse.files}
+                  username={username}
+                  repo={repo}
+                  selectedPath={selectedFile}
+                  onFileSelect={selectFile}
+                />
+              )}
+            </div>
+          </Panel>
+
+          <PanelResizeHandle className="w-1 bg-border hover:bg-emerald-500/40 transition-colors" />
+
+          {/* Middle — File Viewer */}
+          <Panel defaultSize={50} minSize={30}>
+            <div className="h-full overflow-hidden">
+              <FileViewer username={username} repo={repo} filePath={selectedFile} />
+            </div>
+          </Panel>
+
+          <PanelResizeHandle className="w-1 bg-border hover:bg-emerald-500/40 transition-colors" />
+
+          {/* Right — AI Chat */}
+          <Panel ref={rightPanelRef} defaultSize={30} minSize={20} maxSize={50} collapsible
+            onCollapse={() => setRightOpen(false)} onExpand={() => setRightOpen(true)}>
+            <div className="h-full overflow-hidden">
+              <AiChat username={username} repo={repo} selectedFile={selectedFile} />
+            </div>
+          </Panel>
+
+        </PanelGroup>
+      </div>
     </div>
   )
 }

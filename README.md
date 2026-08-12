@@ -48,7 +48,6 @@ npm start
 ```
 
 Opens both servers: **Vite :5173** (frontend) · **FastAPI :8001** (backend)
-
 Visit → `http://localhost:5173`
 
 
@@ -60,17 +59,3 @@ Visit → `http://localhost:5173`
    
 ### Demo
 https://github.com/user-attachments/assets/ca0011aa-8eab-4b49-86b4-880023b273dd
-
-
-## Project Structure
-
-```
-├── src/                    # React frontend
-│   ├── pages/              # Home, RepoPage, UserProfile
-│   ├── components/         # AiChat, FileExplorer, FileViewer, CodeBlock, Loading
-│   └── lib/                # api.ts (all API calls), utils.ts
-├── gitingest-api/          # FastAPI backend — all API routes + RAG pipeline
-│   ├── main.py             # API endpoints (file tree, file content, chat, RAG)
-│   └── rag.py              # Chunk → embed → FAISS → retrieve → prompt
-└── .env                    # API keys (never commit)
-```

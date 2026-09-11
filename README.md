@@ -19,7 +19,7 @@ An AI-powered GitHub repository explorer. Paste any public GitHub URL, browse th
 ### 1. Clone & install
 
 ```bash
-git clone [<repo-url>](https://github.com/Revathi-15/Git-Analyzer)
+git clone https://github.com/Revathi-15/Git-Analyzer
 cd "Git Analyzer"
 
 # Node dependencies (frontend only)

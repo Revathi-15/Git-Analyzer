@@ -50,16 +50,6 @@ npm start
 Opens both servers: **Vite :5173** (frontend) · **FastAPI :8001** (backend)
 Visit → `http://localhost:5173`
 
-
-## How It Works
-1. Paste a GitHub URL → file tree loads instantly
-2. Click **Index Repo** → files are chunked, embedded, and indexed in FAISS
-3. Ask a question in chat → top-5 relevant code chunks retrieved → LLM answers with source citations
-4. Browse files with syntax highlighting (code, markdown, images, PDFs, Jupyter notebooks)
-<<<<<<< HEAD
-
----
-
 ## Project Structure
 
 ```
@@ -85,7 +75,12 @@ Visit → `http://localhost:5173`
 │   └── requirements.txt        # Python dependencies
 └── .env                        # API keys (never commit)
 ```
-=======
-   
+
+## How It Works
+1. Paste a GitHub URL → file tree loads instantly
+2. Click **Index Repo** → files are chunked, embedded, and indexed in FAISS
+3. Ask a question in chat → top-k relevant code chunks retrieved → LLM answers with source citations
+4. Browse files with syntax highlighting (code, markdown, images, PDFs, Jupyter notebooks)
+
 ### Demo
 https://github.com/user-attachments/assets/ca0011aa-8eab-4b49-86b4-880023b273dd

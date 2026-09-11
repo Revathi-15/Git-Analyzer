@@ -2,7 +2,7 @@ import { AiChat } from '@/components/AiChat'
 import { FileExplorer } from '@/components/FileExplorer'
 import { FileViewer } from '@/components/FileViewer'
 import { collectRepoData, type RepoData } from '@/lib/api'
-import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { ArrowLeft, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -86,8 +86,19 @@ export default function RepoPage() {
 
       {/* Top bar with toggle buttons */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border shrink-0 bg-background">
-        {/* Left toggle */}
+        {/* Left toggle + back button */}
         <div className="flex items-center gap-2">
+          {/* Back to home */}
+          <button
+            onClick={() => navigate('/')}
+            title="Back to home"
+            className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+
+          <div className="w-px h-4 bg-border" />
+
           <button
             onClick={toggleLeft}
             title={leftOpen ? 'Close file explorer' : 'Open file explorer'}
@@ -99,9 +110,13 @@ export default function RepoPage() {
           </button>
           <span className="text-sm text-muted-foreground font-medium">
             {loading ? (
-              <span className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse inline-block" />
-                Loading {username}/{repo}...
+              <span className="flex items-center gap-2">
+                {/* small inline spinner in the top bar */}
+                <span className="relative flex h-3.5 w-3.5 shrink-0">
+                  <span className="absolute inset-0 rounded-full border-2 border-muted" />
+                  <span className="absolute inset-0 rounded-full border-2 border-transparent border-t-emerald-500 animate-spin" />
+                </span>
+                <span>Loading {username}/{repo}...</span>
               </span>
             ) : (
               <span>{username} / <span className="text-foreground font-semibold">{repo}</span></span>
@@ -130,14 +145,26 @@ export default function RepoPage() {
             onCollapse={() => setLeftOpen(false)} onExpand={() => setLeftOpen(true)}>
             <div className="h-full border-r border-border overflow-hidden">
               {loading ? (
-                <div className="flex flex-col gap-2 p-3">
-                  {/* Skeleton loader */}
-                  {Array.from({ length: 8 }).map((_, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <div className="h-3.5 w-3.5 rounded bg-muted animate-pulse" />
-                      <div className="h-3 rounded bg-muted animate-pulse" style={{ width: `${40 + (i % 4) * 15}%` }} />
-                    </div>
-                  ))}
+                // circular spinner with status text while file tree loads from GitHub
+                <div className="h-full flex flex-col items-center justify-center gap-4 p-6">
+                  {/* spinning ring */}
+                  <div className="relative w-10 h-10">
+                    <div className="absolute inset-0 rounded-full border-2 border-muted" />
+                    <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-emerald-500 animate-spin" />
+                  </div>
+                  <div className="flex flex-col items-center gap-1 text-center">
+                    <span className="text-xs font-medium text-foreground">Loading files</span>
+                    <span className="text-[10px] text-muted-foreground">Fetching from GitHub...</span>
+                  </div>
+                  {/* faint skeleton bars below spinner for context */}
+                  <div className="w-full flex flex-col gap-2 mt-2 px-1 opacity-30">
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <div className="h-3 w-3 rounded-sm bg-muted animate-pulse shrink-0" />
+                        <div className="h-2.5 rounded bg-muted animate-pulse" style={{ width: `${35 + (i % 4) * 14}%` }} />
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <FileExplorer

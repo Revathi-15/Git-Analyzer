@@ -128,7 +128,7 @@ const QUICK_PROMPTS = [
 export function AiChat({ username, repo, selectedFile }: Props) {
   const [messages, setMessages] = useState<Message[]>([{
     role: 'assistant',
-    content: `Hi! I'm your AI assistant for **${username}/${repo}**. Ask me anything, or click **Index repo** to enable RAG-powered answers grounded in the actual source code.`,
+    content: `Hi! I'm your AI assistant for **${username}/${repo}**. Indexing the repository in the background — ask me anything once it's ready.`,
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
   }])
   const [input, setInput]               = useState('')
@@ -161,6 +161,22 @@ export function AiChat({ username, repo, selectedFile }: Props) {
       .catch(() => {})
   }, [])
 
+  // Auto-index on mount — starts immediately, silently in background
+  // so by the time user types a question, the index is ready
+  useEffect(() => {
+    setRagState('indexing')
+    ingestRepoForRAG(username, repo)
+      .then(res => {
+        if (res.success) {
+          setRagState('ready')
+          setChunksCount(res.chunks_count ?? 0)
+        } else {
+          setRagState('failed')
+        }
+      })
+      .catch(() => setRagState('failed'))
+  }, [username, repo])
+
   // ── Trigger RAG ingestion ONLY when user clicks Index button ───────────────
   const startIndexing = () => {
     if (ragState === 'indexing') return
@@ -172,17 +188,13 @@ export function AiChat({ username, repo, selectedFile }: Props) {
         if (res.success) {
           setRagState('ready')
           setChunksCount(res.chunks_count ?? 0)
-          const cached = res.cached ? ' (from cache)' : ''
-          setMessages(prev => [...prev, {
-            role: 'assistant',
-            content: `Indexed${cached}. **${res.chunks_count} chunks** from **${res.files_count} files** ready. Ask me anything!`,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          }])
+          // no chat message — RAG badge in header already shows "RAG ready · N chunks"
         } else {
           setRagState('failed')
+          // only show a message when indexing explicitly fails so user understands why
           setMessages(prev => [...prev, {
             role: 'assistant',
-            content: `⚠️ Indexing failed: ${res.error ?? 'unknown error'}.`,
+            content: `⚠️ Indexing failed: ${res.error ?? 'unknown error'}. You can still ask questions using general knowledge.`,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           }])
         }
@@ -192,7 +204,8 @@ export function AiChat({ username, repo, selectedFile }: Props) {
 
   // ── Send a message ──────────────────────────────────────────────────────────
   const send = useCallback(async (text: string) => {
-    if (!text.trim() || streaming) return
+    // block send while indexing is in progress or already streaming
+    if (!text.trim() || streaming || ragState === 'indexing') return
     const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
     setMessages(prev => [...prev, { role: 'user', content: text, timestamp: ts }])
@@ -312,12 +325,14 @@ export function AiChat({ username, repo, selectedFile }: Props) {
         </div>
         <div className="flex items-center gap-2">
           <RAGBadge state={ragState} chunksCount={chunksCount} />
-          {ragState === 'idle' && (
+          {/* Index repo button hidden — auto-index runs on mount */}
+          {/* Only show Retry if auto-index failed */}
+          {ragState === 'failed' && (
             <button
               onClick={startIndexing}
-              className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-blue-500/40 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-colors whitespace-nowrap"
+              className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-red-500/40 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors whitespace-nowrap"
             >
-              <Database className="h-3 w-3" /> Index repo
+              <Database className="h-3 w-3" /> Retry
             </button>
           )}
           {ragState === 'ready' && (
@@ -414,53 +429,62 @@ export function AiChat({ username, repo, selectedFile }: Props) {
           ))}
         </div>
 
-        {/* Textarea */}
-        <div className="flex gap-2 bg-muted p-2 rounded-xl border border-border focus-within:border-emerald-500/50 transition-colors">
+        {/* Textarea + send — locked while indexing */}
+        <div className={cn(
+          'flex gap-2 bg-muted p-2 rounded-xl border transition-colors',
+          ragState === 'indexing'
+            ? 'border-amber-500/30 opacity-70 cursor-not-allowed'
+            : 'border-border focus-within:border-emerald-500/50'
+        )}>
           <textarea
             ref={inputRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder={ragState === 'ready' ? 'Ask about this codebase (RAG-powered)...' : 'Ask about this repository...'}
+            placeholder={
+              ragState === 'indexing'
+                ? '⏳ Wait — indexing repository...'
+                : ragState === 'ready'
+                ? 'Ask about this codebase (RAG-powered)...'
+                : ragState === 'failed'
+                ? 'Ask anything (index failed, using general knowledge)...'
+                : 'Ask about this repository...'
+            }
             rows={1}
-            disabled={false}
-            className="flex-1 min-h-[40px] max-h-[160px] resize-none bg-transparent border-none outline-none text-sm text-foreground placeholder:text-muted-foreground py-2 px-2"
+            // disable input while indexing — user must wait for index to complete
+            disabled={ragState === 'indexing'}
+            className="flex-1 min-h-[40px] max-h-[160px] resize-none bg-transparent border-none outline-none text-sm text-foreground placeholder:text-muted-foreground py-2 px-2 disabled:cursor-not-allowed"
           />
           {streaming ? (
-            /* Stop button — shown for the entire generation (loading + token streaming) */
             <button
-              onClick={() => {
-                streamCtrlRef.current?.abort()
-                setLoading(false)
-                setStreaming(false)
-              }}
+              onClick={() => { streamCtrlRef.current?.abort(); setLoading(false); setStreaming(false) }}
               title="Stop generating"
               className="h-10 w-10 rounded-full bg-white flex items-center justify-center shrink-0 shadow-md hover:bg-white/90 transition-all"
             >
               <span className="h-3.5 w-3.5 rounded-sm bg-black block" />
             </button>
           ) : (
-            /* Send button — shown when idle */
             <button
               onClick={() => send(input)}
-              disabled={!input.trim()}
+              disabled={!input.trim() || ragState === 'indexing'}
               className={cn(
                 'h-10 w-10 rounded-full flex items-center justify-center transition-all shrink-0',
-                input.trim()
+                input.trim() && ragState !== 'indexing'
                   ? 'bg-white text-black hover:bg-white/90 shadow-md'
                   : 'bg-muted/50 text-muted-foreground cursor-not-allowed'
               )}
             >
-              <SendHorizontal className="h-4 w-4" />
+              {ragState === 'indexing'
+                ? <span className="h-4 w-4 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                : <SendHorizontal className="h-4 w-4" />}
             </button>
           )}
         </div>
         <p className="text-[10px] text-muted-foreground text-center mt-2">
-          {ragState === 'ready'
-            ? `Grounded in ${chunksCount} chunks via FAISS search`
-            : ragState === 'indexing'
-            ? 'Indexing repository...'
-            : 'Click "Index repo" for RAG-powered answers'}
+          {ragState === 'ready'    && `Grounded in ${chunksCount} chunks via FAISS search`}
+          {ragState === 'indexing' && 'Indexing repository in background...'}
+          {ragState === 'failed'   && 'Index failed — answers use general knowledge'}
+          {ragState === 'idle'     && 'Preparing...'}
         </p>
       </div>
     </div>

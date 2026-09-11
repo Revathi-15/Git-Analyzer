@@ -1,0 +1,39 @@
+# Git Analyzer — Backend Configuration
+# All secrets go in .env — this file holds non-secret tunables only.
+
+app:
+  title: "Git Analyzer API"
+  version: "2.0.0"
+  port: 8001
+
+rate_limit:
+  requests_per_window: 100
+  window_seconds: 86400       # 24 hours
+
+rag:
+  chunk_size: 800
+  chunk_overlap: 120
+  top_k: 5
+  cache_ttl_seconds: 10800    # 3 hours
+  max_files_per_repo: 80
+  max_file_size_bytes: 200000
+
+embedding:
+  model: "all-MiniLM-L6-v2"
+  dimensions: 384
+  batch_size: 64
+
+llm:
+  max_tokens: 1024
+  temperature: 0.3
+  models:
+    - "openai/gpt-oss-20b:free"
+    - "deepseek/deepseek-r1-0528:free"
+    - "google/gemma-3-27b-it:free"
+    - "mistralai/mistral-7b-instruct:free"
+
+logging:
+  level: "INFO"
+  log_file: "logs/app.log"
+  max_bytes: 5242880          # 5 MB
+  backup_count: 3

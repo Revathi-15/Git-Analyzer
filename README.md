@@ -39,7 +39,7 @@ npm install
 python -m venv .venv
 .venv\Scripts\activate          # Windows
 # source .venv/bin/activate     # Mac/Linux
-pip install -r gitingest-api/requirements.txt
+pip install -r backend/requirements.txt
 ```
 
 ### 2 — Configure environment variables
@@ -75,12 +75,25 @@ Visit → `http://localhost:5173`
 ## Project Structure
 
 ```
-├── src/                    # React frontend
-│   ├── pages/              # Home, RepoPage, UserProfile
-│   ├── components/         # AiChat, FileExplorer, FileViewer, CodeBlock, Loading
-│   └── lib/                # api.ts (all API calls), utils.ts
-├── gitingest-api/          # FastAPI backend — all API routes + RAG pipeline
-│   ├── main.py             # API endpoints (file tree, file content, chat, RAG)
-│   └── rag.py              # Chunk → embed → FAISS → retrieve → prompt
-└── .env                    # API keys (never commit)
+├── src/                        # React frontend
+│   ├── pages/                  # Home, RepoPage, UserProfile
+│   ├── components/             # AiChat, FileExplorer, FileViewer, CodeBlock, Loading
+│   └── lib/                    # api.ts, utils.ts
+├── backend/                    # Python FastAPI backend
+│   ├── src/
+│   │   ├── ingestion/          # GitHub API fetch, file tree builder
+│   │   ├── chunking/           # LangChain text splitter
+│   │   ├── embeddings/         # HuggingFace all-MiniLM-L6-v2
+│   │   ├── vectordb/           # FAISS index, pipeline cache
+│   │   ├── retrieval/          # Top-k similarity search
+│   │   ├── prompts/            # Grounded prompt builder
+│   │   ├── llm/                # OpenRouter LLM calls (stream + non-stream)
+│   │   ├── api/                # All FastAPI route handlers
+│   │   └── utils/              # Rate limiter, IP utils, Pydantic models
+│   ├── tests/                  # Pytest test suite
+│   ├── logs/                   # Rotating log files
+│   ├── config.yaml             # Non-secret configuration
+│   ├── main.py                 # App entry point
+│   └── requirements.txt        # Python dependencies
+└── .env                        # API keys (never commit)
 ```

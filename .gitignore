@@ -1,49 +1,46 @@
-# dependencies
-node_modules
-/server/node_modules
+# ── Dependencies ──────────────────────────────────────────────────────────────
+node_modules/
 
-# build output
-/dist
+# ── Build output ──────────────────────────────────────────────────────────────
+/dist/
+/build/
 /.next/
 /out/
-/build
 
-# debug logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# env files — never commit secrets
+# ── Environment variables — never commit secrets ──────────────────────────────
 .env
 .env.*
 .env.local
 .env.production
 .env.development
 
-# vercel
-.vercel
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+backend/logs/*.log
 
-# typescript
+# ── TypeScript ────────────────────────────────────────────────────────────────
 *.tsbuildinfo
 next-env.d.ts
 
-# Python
-__pycache__/
-*.pyc
-.venv/
-venv/
-
-# OS
+# ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# Editor
+# ── Editor ────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 
-# Server runtime files
-server/.backend-port
+# ── Logs ─────────────────────────────────────────────────────────────────────
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
-# Local PDF guides
+# ── Misc ─────────────────────────────────────────────────────────────────────
+.vercel
 *.pdf
+Demo.mp4

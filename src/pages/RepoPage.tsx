@@ -34,6 +34,10 @@ export default function RepoPage() {
     setSearchParams({ file: path })
   }, [setSearchParams])
 
+  const closeFile = useCallback(() => {
+    setSearchParams({})
+  }, [setSearchParams])
+
   useEffect(() => {
     if (!username || !repo) return
     setError(null)
@@ -183,7 +187,7 @@ export default function RepoPage() {
           {/* Middle — File Viewer */}
           <Panel defaultSize={50} minSize={30}>
             <div className="h-full overflow-hidden">
-              <FileViewer username={username} repo={repo} filePath={selectedFile} />
+              <FileViewer username={username} repo={repo} filePath={selectedFile} onClose={selectedFile ? closeFile : undefined} />
             </div>
           </Panel>
 

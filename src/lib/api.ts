@@ -59,12 +59,21 @@ export async function collectRepoData(
   repo: string,
   force = false
 ): Promise<{ success: boolean; data?: RepoData; error?: string }> {
-  const res = await fetch(`${BASE}/collect-repo-data`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, repo, force }),
-  })
-  return res.json()
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 60_000) // 60s timeout
+  try {
+    const res = await fetch(`${BASE}/collect-repo-data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, repo, force }),
+      signal: controller.signal,
+    })
+    clearTimeout(timeout)
+    return res.json()
+  } catch (e: any) {
+    clearTimeout(timeout)
+    return { success: false, error: e?.message ?? 'Network error' }
+  }
 }
 
 /** Fetch a single file's content */
@@ -114,12 +123,25 @@ export async function ingestRepoForRAG(
   repo: string,
   force = false
 ): Promise<RAGIngestResponse> {
-  const res = await fetch(`${BASE}/ingest-rag`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, repo, force }),
-  })
-  return res.json()
+  // Use a long timeout — free tier Render needs 60-90s to load the model on first request
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 120_000) // 2 minute timeout
+  try {
+    const res = await fetch(`${BASE}/ingest-rag`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, repo, force }),
+      signal: controller.signal,
+    })
+    clearTimeout(timeout)
+    return res.json()
+  } catch (e: any) {
+    clearTimeout(timeout)
+    if (e?.name === 'AbortError') {
+      return { success: false, error: 'Indexing timed out — backend may be waking up. Click Retry.' }
+    }
+    return { success: false, error: e?.message ?? 'Network error' }
+  }
 }
 
 /**

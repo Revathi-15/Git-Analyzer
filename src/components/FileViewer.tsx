@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
 import remarkGfm from 'remark-gfm'
-import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react'
+import { ZoomIn, ZoomOut, RotateCcw, X } from 'lucide-react'
 import { Document, Page, pdfjs } from 'react-pdf'
 import { CodeBlock } from './CodeBlock'
 import { Loading } from './Loading'
@@ -72,9 +72,10 @@ interface Props {
   username: string
   repo: string
   filePath: string | null
+  onClose?: () => void
 }
 
-export function FileViewer({ username, repo, filePath }: Props) {
+export function FileViewer({ username, repo, filePath, onClose }: Props) {
   const [content, setContent] = useState<string | null>(null)
   const [isBinary, setIsBinary] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -108,7 +109,18 @@ export function FileViewer({ username, repo, filePath }: Props) {
       {/* Header bar */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted shrink-0">
         <span className="text-xs font-mono text-muted-foreground truncate">{filePath}</span>
-        <span className="text-xs text-muted-foreground uppercase ml-2 shrink-0">{fileType}</span>
+        <div className="flex items-center gap-2 ml-2 shrink-0">
+          <span className="text-xs text-muted-foreground uppercase">{fileType}</span>
+          {onClose && (
+            <button
+              onClick={onClose}
+              title="Close file"
+              className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Content */}
@@ -160,9 +172,18 @@ export function FileViewer({ username, repo, filePath }: Props) {
               )
             default:
               return (
-                <pre className="p-4 text-sm font-mono whitespace-pre-wrap text-zinc-300 leading-relaxed">
-                  {content}
-                </pre>
+                <div className="flex h-full overflow-auto">
+                  {/* Line numbers column */}
+                  <div className="select-none shrink-0 text-right pr-4 pl-4 pt-4 pb-4 text-xs font-mono text-zinc-600 bg-zinc-900/50 border-r border-zinc-800 leading-relaxed">
+                    {content.split('\n').map((_, i) => (
+                      <div key={i}>{i + 1}</div>
+                    ))}
+                  </div>
+                  {/* Code content */}
+                  <pre className="flex-1 p-4 text-sm font-mono whitespace-pre text-zinc-300 leading-relaxed overflow-auto">
+                    {content}
+                  </pre>
+                </div>
               )
           }
         })()}

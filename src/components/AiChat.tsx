@@ -164,17 +164,44 @@ export function AiChat({ username, repo, selectedFile }: Props) {
   // Auto-index on mount — starts immediately, silently in background
   // so by the time user types a question, the index is ready
   useEffect(() => {
-    setRagState('indexing')
-    ingestRepoForRAG(username, repo)
-      .then(res => {
+    let cancelled = false
+    const doIndex = async () => {
+      setRagState('indexing')
+      try {
+        const res = await ingestRepoForRAG(username, repo)
+        if (cancelled) return
         if (res.success) {
           setRagState('ready')
           setChunksCount(res.chunks_count ?? 0)
         } else {
-          setRagState('failed')
+          // if timed out (backend waking up), auto-retry once after 10s
+          if (res.error?.includes('timed out') || res.error?.includes('waking')) {
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: '⏳ Backend is waking up (free tier). Auto-retrying in 10 seconds...',
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            }])
+            setTimeout(async () => {
+              if (cancelled) return
+              const retry = await ingestRepoForRAG(username, repo)
+              if (cancelled) return
+              if (retry.success) {
+                setRagState('ready')
+                setChunksCount(retry.chunks_count ?? 0)
+              } else {
+                setRagState('failed')
+              }
+            }, 10_000)
+          } else {
+            setRagState('failed')
+          }
         }
-      })
-      .catch(() => setRagState('failed'))
+      } catch {
+        if (!cancelled) setRagState('failed')
+      }
+    }
+    doIndex()
+    return () => { cancelled = true }
   }, [username, repo])
 
   // ── Trigger RAG ingestion ONLY when user clicks Index button ───────────────

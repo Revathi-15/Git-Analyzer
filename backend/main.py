@@ -57,18 +57,9 @@ app.include_router(router)
 
 @app.on_event("startup")
 async def warmup():
-    # pre-load the HuggingFace embedding model in a background thread at startup
-    # without this, the first /api/ingest-rag or /api/chat call takes ~30-60s
-    # to load the model — warmup makes it instant for the user
-    logger.info("[Warmup] Pre-loading embedding model in background...")
-
-    def _load():
-        from src.embeddings.embedder import get_embedder
-        get_embedder()  # loads all-MiniLM-L6-v2 into memory
-        logger.info("[Warmup] Embedding model ready.")
-
-    # run in thread so it doesn't block the server from accepting requests
-    asyncio.get_event_loop().run_in_executor(None, _load)
+    # Skip pre-loading on free tier to avoid OOM crash
+    # Model loads lazily on first request instead
+    logger.info("[Warmup] Skipping model pre-load (free tier RAM limit).")
 
 
 if __name__ == "__main__":

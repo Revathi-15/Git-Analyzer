@@ -44,6 +44,7 @@ app.add_middleware(
         "http://localhost:5173",
         "https://*.vercel.app",
         "https://git-analyzer-azure.vercel.app",
+        "https://git-analyzer-et07.onrender.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],

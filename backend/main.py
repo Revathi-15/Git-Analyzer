@@ -40,7 +40,11 @@ app = FastAPI(
 # CORS — allows React frontend (port 5173) to call this API (port 8001)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "https://*.vercel.app",
+        "https://git-analyzer-azure.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -12,15 +12,38 @@ import 'react-pdf/dist/Page/TextLayer.css'
 
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
 
-type FileType = 'text' | 'markdown' | 'image' | 'pdf' | 'notebook'
+type FileType = 'code' | 'markdown' | 'image' | 'pdf' | 'notebook' | 'plaintext'
 
-function getFileType(path: string): FileType {
+// Maps file extension → syntax highlighter language name
+const EXT_TO_LANG: Record<string, string> = {
+  js: 'javascript', jsx: 'jsx', ts: 'typescript', tsx: 'tsx',
+  py: 'python', rb: 'ruby', go: 'go', rs: 'rust', java: 'java',
+  cs: 'csharp', cpp: 'cpp', cc: 'cpp', c: 'c', h: 'c',
+  php: 'php', swift: 'swift', kt: 'kotlin', scala: 'scala',
+  html: 'html', css: 'css', scss: 'scss', sass: 'sass', less: 'less',
+  json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'toml',
+  xml: 'xml', sql: 'sql', sh: 'bash', bash: 'bash', zsh: 'bash',
+  dockerfile: 'docker', vue: 'vue', svelte: 'markup',
+  graphql: 'graphql', r: 'r', lua: 'lua', dart: 'dart',
+  env: 'bash', gitignore: 'bash', ini: 'ini', cfg: 'ini',
+}
+
+function getFileInfo(path: string): { type: FileType; lang: string } {
   const ext = path.split('.').pop()?.toLowerCase() || ''
-  if (['jpg','jpeg','png','gif','svg','webp','bmp','ico'].includes(ext)) return 'image'
-  if (ext === 'pdf') return 'pdf'
-  if (ext === 'ipynb') return 'notebook'
-  if (['md','markdown','mdx'].includes(ext)) return 'markdown'
-  return 'text'
+  const filename = path.split('/').pop()?.toLowerCase() || ''
+
+  if (['jpg','jpeg','png','gif','svg','webp','bmp','ico'].includes(ext))
+    return { type: 'image', lang: '' }
+  if (ext === 'pdf') return { type: 'pdf', lang: '' }
+  if (ext === 'ipynb') return { type: 'notebook', lang: '' }
+  if (['md','markdown','mdx'].includes(ext)) return { type: 'markdown', lang: '' }
+
+  // Check extension map for code files
+  const lang = EXT_TO_LANG[ext] || EXT_TO_LANG[filename] || ''
+  if (lang) return { type: 'code', lang }
+
+  // Fallback — plain text
+  return { type: 'plaintext', lang: '' }
 }
 
 // ── Notebook renderer (minimal) ───────────────────────────────────────────────
@@ -102,15 +125,17 @@ export function FileViewer({ username, repo, filePath, onClose }: Props) {
     )
   }
 
-  const fileType = getFileType(filePath)
+  const { type: fileType, lang } = getFileInfo(filePath)
+  // label shown in header
+  const typeLabel = fileType === 'code' ? (lang.toUpperCase() || 'CODE') : fileType.toUpperCase()
 
   return (
     <div className="flex flex-col h-full bg-background">
-      {/* Header bar */}
+      {/* Header bar — breadcrumb style */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted shrink-0">
         <span className="text-xs font-mono text-muted-foreground truncate">{filePath}</span>
         <div className="flex items-center gap-2 ml-2 shrink-0">
-          <span className="text-xs text-muted-foreground uppercase">{fileType}</span>
+          <span className="text-xs text-muted-foreground uppercase">{typeLabel}</span>
           {onClose && (
             <button
               onClick={onClose}
@@ -170,17 +195,19 @@ export function FileViewer({ username, repo, filePath, onClose }: Props) {
                   </ReactMarkdown>
                 </div>
               )
+            case 'code':
+              // Syntax highlighted with line numbers — matches VS Code style
+              return <CodeBlock language={lang} value={content} showLineNumbers />
             default:
+              // Plain text — show with line numbers but no syntax highlighting
               return (
                 <div className="flex h-full overflow-auto">
-                  {/* Line numbers column */}
-                  <div className="select-none shrink-0 text-right pr-4 pl-4 pt-4 pb-4 text-xs font-mono text-zinc-600 bg-zinc-900/50 border-r border-zinc-800 leading-relaxed">
+                  <div className="select-none shrink-0 text-right pr-4 pl-4 pt-4 pb-4 text-xs font-mono text-zinc-600 bg-zinc-900/50 border-r border-zinc-800 leading-[1.5rem]">
                     {content.split('\n').map((_, i) => (
                       <div key={i}>{i + 1}</div>
                     ))}
                   </div>
-                  {/* Code content */}
-                  <pre className="flex-1 p-4 text-sm font-mono whitespace-pre text-zinc-300 leading-relaxed overflow-auto">
+                  <pre className="flex-1 p-4 text-sm font-mono whitespace-pre text-zinc-300 leading-6 overflow-auto">
                     {content}
                   </pre>
                 </div>

@@ -2,31 +2,108 @@ import { AiChat } from '@/components/AiChat'
 import { FileExplorer } from '@/components/FileExplorer'
 import { FileViewer } from '@/components/FileViewer'
 import { collectRepoData, type RepoData } from '@/lib/api'
-import { ArrowLeft, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import {
+  ArrowLeft, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen,
+  AlertCircle, GitFork, Home, RefreshCw,
+} from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+
+// ── Classify the error from a GitHub API response ─────────────────────────────
+async function diagnoseRepoError(username: string, repo: string): Promise<string> {
+  try {
+    // 1. Does the user exist?
+    const userRes = await fetch(`https://api.github.com/users/${encodeURIComponent(username)}`)
+    if (!userRes.ok) {
+      return `GitHub user "@${username}" doesn't exist. Double-check the username.`
+    }
+    // 2. Does the repo exist under this user?
+    const repoRes = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(username)}/${encodeURIComponent(repo)}`
+    )
+    if (repoRes.status === 404) {
+      return `Repository "${repo}" wasn't found under @${username}. It may be private, renamed, or deleted.`
+    }
+    if (repoRes.status === 403) {
+      return `GitHub rate limit reached. Wait a minute then try again.`
+    }
+    if (!repoRes.ok) {
+      return `GitHub returned an error (HTTP ${repoRes.status}). Try again shortly.`
+    }
+    // Repo exists but our backend failed
+    return `Repository found on GitHub but our backend couldn't load it. Try refreshing.`
+  } catch {
+    return `Network error — check your connection and try again.`
+  }
+}
+
+// ── Full-screen error state ───────────────────────────────────────────────────
+function RepoError({
+  username, repo, message, onRetry,
+}: {
+  username: string
+  repo: string
+  message: string
+  onRetry: () => void
+}) {
+  const navigate = useNavigate()
+  return (
+    <div className="h-screen bg-[#03040a] flex flex-col items-center justify-center gap-6 px-6 text-center">
+      {/* Icon */}
+      <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-red-500/20 bg-red-500/10">
+        <AlertCircle className="h-8 w-8 text-red-400" />
+      </div>
+
+      {/* Heading */}
+      <div className="space-y-1">
+        <h2 className="text-xl font-bold text-white">
+          Couldn't load{' '}
+          <span className="text-indigo-400">{username}/</span>
+          <span className="text-white">{repo}</span>
+        </h2>
+        <p className="text-sm text-slate-400 max-w-sm leading-relaxed">{message}</p>
+      </div>
+
+      {/* Actions */}
+      <div className="flex flex-wrap items-center justify-center gap-3 mt-2">
+        <button
+          onClick={onRetry}
+          className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 hover:bg-white/10 transition-colors"
+        >
+          <RefreshCw className="h-4 w-4" /> Retry
+        </button>
+        <button
+          onClick={() => navigate(`/${username}`)}
+          className="flex items-center gap-2 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-4 py-2 text-sm text-indigo-300 hover:bg-indigo-500/20 transition-colors"
+        >
+          <GitFork className="h-4 w-4" /> Browse @{username}'s repos
+        </button>
+        <button
+          onClick={() => navigate('/')}
+          className="flex items-center gap-2 rounded-xl border border-white/8 bg-transparent px-4 py-2 text-sm text-slate-500 hover:text-slate-300 transition-colors"
+        >
+          <Home className="h-4 w-4" /> Home
+        </button>
+      </div>
+    </div>
+  )
+}
 
 export default function RepoPage() {
   const { username, repo } = useParams<{ username: string; repo: string }>()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const [repoData, setRepoData] = useState<RepoData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [leftOpen, setLeftOpen] = useState(true)
-  const [rightOpen, setRightOpen] = useState(true)
+  const [repoData, setRepoData]     = useState<RepoData | null>(null)
+  const [loading, setLoading]       = useState(true)
+  const [errorMsg, setErrorMsg]     = useState<string | null>(null)
+  const [diagnosing, setDiagnosing] = useState(false)
+  const [leftOpen, setLeftOpen]     = useState(true)
+  const [rightOpen, setRightOpen]   = useState(true)
 
   const leftPanelRef  = useRef<ImperativePanelHandle>(null)
   const rightPanelRef = useRef<ImperativePanelHandle>(null)
-
-  const fallbackRepoData = (user: string, project: string): RepoData => ({
-    summary: `Preview available for ${user}/${project}.`,
-    tree: 'Repository preview loaded',
-    content: '',
-    files: [],
-  })
 
   const selectedFile = searchParams.get('file')
 
@@ -38,19 +115,29 @@ export default function RepoPage() {
     setSearchParams({})
   }, [setSearchParams])
 
-  useEffect(() => {
+  const loadRepo = useCallback(async () => {
     if (!username || !repo) return
-    setError(null)
+    setErrorMsg(null)
     setLoading(true)
+    setRepoData(null)
 
-    collectRepoData(username, repo, false)
-      .then(res => {
-        if (!res.success || !res.data) throw new Error(res.error || 'Failed to load')
-        setRepoData(res.data)
-      })
-      .catch(() => setRepoData(fallbackRepoData(username, repo)))
-      .finally(() => setLoading(false))
+    const res = await collectRepoData(username, repo, false)
+
+    if (res.success && res.data) {
+      setRepoData(res.data)
+      setLoading(false)
+      return
+    }
+
+    // Backend failed — ask GitHub directly to give a precise error message
+    setDiagnosing(true)
+    const msg = await diagnoseRepoError(username, repo)
+    setDiagnosing(false)
+    setErrorMsg(msg)
+    setLoading(false)
   }, [username, repo])
+
+  useEffect(() => { loadRepo() }, [loadRepo])
 
   const toggleLeft = () => {
     if (leftOpen) {
@@ -74,16 +161,26 @@ export default function RepoPage() {
 
   if (!username || !repo) {
     return (
-      <div className="h-screen bg-background flex flex-col items-center justify-center gap-4 text-muted-foreground">
-        <p>{error || 'Repository not found'}</p>
-        <button onClick={() => navigate('/')} className="px-4 py-2 rounded-lg bg-muted hover:bg-accent text-sm transition-colors">
+      <div className="h-screen bg-[#03040a] flex flex-col items-center justify-center gap-4 text-slate-400">
+        <p>Repository not found</p>
+        <button onClick={() => navigate('/')} className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-sm transition-colors">
           ← Go home
         </button>
       </div>
     )
   }
 
-  const repoDataToUse = repoData || fallbackRepoData(username, repo)
+  // ── Error screen (with diagnosis) ─────────────────────────────────────────
+  if (!loading && errorMsg) {
+    return (
+      <RepoError
+        username={username}
+        repo={repo}
+        message={diagnosing ? 'Diagnosing error…' : errorMsg}
+        onRetry={loadRepo}
+      />
+    )
+  }
 
   return (
     <div className="h-screen bg-background overflow-hidden flex flex-col">
@@ -115,12 +212,11 @@ export default function RepoPage() {
           <span className="text-sm text-muted-foreground font-medium">
             {loading ? (
               <span className="flex items-center gap-2">
-                {/* small inline spinner in the top bar */}
                 <span className="relative flex h-3.5 w-3.5 shrink-0">
                   <span className="absolute inset-0 rounded-full border-2 border-muted" />
                   <span className="absolute inset-0 rounded-full border-2 border-transparent border-t-emerald-500 animate-spin" />
                 </span>
-                <span>Loading {username}/{repo}...</span>
+                <span>{diagnosing ? 'Diagnosing…' : `Loading ${username}/${repo}...`}</span>
               </span>
             ) : (
               <span>{username} / <span className="text-foreground font-semibold">{repo}</span></span>
@@ -149,9 +245,7 @@ export default function RepoPage() {
             onCollapse={() => setLeftOpen(false)} onExpand={() => setLeftOpen(true)}>
             <div className="h-full border-r border-border overflow-hidden">
               {loading ? (
-                // circular spinner with status text while file tree loads from GitHub
                 <div className="h-full flex flex-col items-center justify-center gap-4 p-6">
-                  {/* spinning ring */}
                   <div className="relative w-10 h-10">
                     <div className="absolute inset-0 rounded-full border-2 border-muted" />
                     <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-emerald-500 animate-spin" />
@@ -160,7 +254,6 @@ export default function RepoPage() {
                     <span className="text-xs font-medium text-foreground">Loading files</span>
                     <span className="text-[10px] text-muted-foreground">Fetching from GitHub...</span>
                   </div>
-                  {/* faint skeleton bars below spinner for context */}
                   <div className="w-full flex flex-col gap-2 mt-2 px-1 opacity-30">
                     {Array.from({ length: 6 }).map((_, i) => (
                       <div key={i} className="flex items-center gap-2">
@@ -172,7 +265,7 @@ export default function RepoPage() {
                 </div>
               ) : (
                 <FileExplorer
-                  files={repoDataToUse.files}
+                  files={repoData?.files ?? []}
                   username={username}
                   repo={repo}
                   selectedPath={selectedFile}

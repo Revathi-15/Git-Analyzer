@@ -11,19 +11,46 @@ root.render(
   </StrictMode>
 )
 
-// Wait for React to paint its first frame, then fade out + remove the splash
-// Two rAF calls ensure the DOM has actually been painted before we hide the splash
-requestAnimationFrame(() => {
-  requestAnimationFrame(() => {
-    const splash = document.getElementById('splash')
-    const canvas = document.getElementById('splash-canvas')
-    if (splash) {
-      splash.classList.add('hidden')
-      // remove from DOM after CSS transition ends (700ms in index.html)
-      setTimeout(() => {
-        splash.remove()
-        canvas?.remove()
-      }, 750)
-    }
-  })
-})
+// Dismiss splash reliably:
+// - Wait at least 800ms so the entrance animation feels intentional (not a flash)
+// - Use a microtask flush (Promise.resolve) + rAF to ensure React has painted
+//   before we start the fade-out transition
+const splashStart = Date.now()
+const MIN_SPLASH_MS = 800
+
+function dismissSplash() {
+  const elapsed = Date.now() - splashStart
+  const remaining = Math.max(0, MIN_SPLASH_MS - elapsed)
+  setTimeout(() => {
+    Promise.resolve().then(() => {
+      requestAnimationFrame(() => {
+        const splash = document.getElementById('splash')
+        const canvas = document.getElementById('splash-canvas')
+        const rootEl = document.getElementById('root')
+        if (!splash) return
+
+        // Stop particle loop + typewriter immediately
+        ;(window as any).particlesRunning = false
+
+        // Start fade-out
+        splash.classList.add('hidden')
+
+        // Once the CSS transition finishes (700ms), remove splash from DOM
+        // and reveal the app — only then re-enable scroll
+        setTimeout(() => {
+          splash.remove()
+          canvas?.remove()
+          document.body.classList.remove('splash-active')
+          // Fade the root in smoothly rather than snapping into view
+          if (rootEl) {
+            rootEl.style.transition = 'opacity 0.2s ease'
+            rootEl.style.opacity = '1'
+          }
+        }, 720)
+      })
+    })
+  }, remaining)
+}
+
+// Kick off dismissal after React renders
+requestAnimationFrame(dismissSplash)

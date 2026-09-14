@@ -8,21 +8,27 @@
     <meta name="description" content="Understand GitHub repositories with AI-powered insights and analysis" />
     <style>
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-      body { background: #03040a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; }
+      body { background: #03040a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+      /* overflow:hidden only while splash is active — removed by JS after dismiss */
+      body.splash-active { overflow: hidden; }
 
       /* ── Canvas background (animated via JS) ───────────────────────────── */
       #splash-canvas {
-        position: fixed; inset: 0; z-index: 0;
+        position: fixed; inset: 0; z-index: 99;
       }
 
       /* ── Splash wrapper ─────────────────────────────────────────────────── */
       #splash {
-        position: fixed; inset: 0; z-index: 10;
+        position: fixed; inset: 0; z-index: 100;
         display: flex; flex-direction: column;
         align-items: center; justify-content: center; gap: 36px;
+        background: #03040a; /* opaque — nothing bleeds through during fade */
         transition: opacity 0.7s cubic-bezier(.4,0,.2,1), visibility 0.7s;
       }
       #splash.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+
+      /* App root — hidden until splash is fully gone, then faded in by main.tsx */
+      #root { opacity: 0; }
 
       /* ── Dot grid ───────────────────────────────────────────────────────── */
       #splash::before {
@@ -191,7 +197,7 @@
     </style>
   </head>
 
-  <body class="dark">
+  <body class="dark splash-active">
 
     <!-- animated particle canvas -->
     <canvas id="splash-canvas"></canvas>
@@ -257,6 +263,7 @@
       const canvas = document.getElementById('splash-canvas')
       const ctx = canvas.getContext('2d')
       let W, H, particles = []
+      window.particlesRunning = true   // set to false by main.tsx when splash is dismissed
 
       function resize() {
         W = canvas.width  = window.innerWidth
@@ -279,7 +286,7 @@
       }
 
       function drawParticles() {
-        if (!document.getElementById('splash')) return
+        if (!window.particlesRunning) return   // clean stop — no more rAF after dismiss
         ctx.clearRect(0, 0, W, H)
         particles.forEach(p => {
           p.x += p.vx; p.y += p.vy
@@ -324,7 +331,7 @@
       let li = 0, ci = 0, deleting = false
 
       function type() {
-        if (!el || !document.getElementById('splash')) return
+        if (!el || !window.particlesRunning) return
         const line = lines[li]
         if (!deleting) {
           el.innerHTML = line.slice(0, ci) + '<span class="cursor"></span>'

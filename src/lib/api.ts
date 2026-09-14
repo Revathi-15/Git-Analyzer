@@ -249,7 +249,11 @@ export function askGeminiStream(
       let done: boolean, value: Uint8Array | undefined
       try {
         ;({ done, value } = await reader.read())
-      } catch {
+      } catch (e: any) {
+        // AbortError means the caller called ctrl.abort() — notify as a clean stop
+        if (e?.name === 'AbortError') {
+          callbacks.onError?.('__aborted__')
+        }
         break
       }
       if (done) break

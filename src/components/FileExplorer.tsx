@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, FileCode, FileText, Folder, Search, FileJson, Package } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { FileNode } from '@/lib/api'
@@ -8,6 +8,7 @@ interface Props {
   username: string
   repo: string
   selectedPath: string | null
+  openPaths?: string[]
   onFileSelect: (path: string) => void
 }
 
@@ -33,6 +34,7 @@ function Tree({
   expanded,
   toggle,
   selected,
+  openPaths,
   onSelect,
   query,
 }: {
@@ -41,6 +43,7 @@ function Tree({
   expanded: Set<string>
   toggle: (p: string) => void
   selected: string | null
+  openPaths: string[]
   onSelect: (p: string) => void
   query: string
 }) {
@@ -53,16 +56,27 @@ function Tree({
       {filtered.map(node => {
         const isOpen = expanded.has(node.path)
         const isSelected = node.path === selected
+        const isOpenInTab = node.type === 'file' && openPaths.includes(node.path)
         return (
           <div key={node.path}>
             <div
               style={{ paddingLeft: `${level * 12 + 8}px` }}
               onClick={() => node.type === 'directory' ? toggle(node.path) : onSelect(node.path)}
               className={cn(
-                'flex items-center py-1.5 pr-2 cursor-pointer rounded text-sm select-none',
-                isSelected ? 'bg-emerald-500/20 text-emerald-400' : 'hover:bg-muted'
+                'relative flex items-center py-1.5 pr-2 cursor-pointer rounded text-sm select-none transition-colors',
+                isSelected
+                  ? 'bg-emerald-500/[0.12] text-emerald-300'
+                  : 'hover:bg-muted text-foreground'
               )}
             >
+              {/* Left accent bar for active file */}
+              {isSelected && node.type === 'file' && (
+                <span className="absolute left-0 top-0.5 bottom-0.5 w-0.5 rounded-full bg-emerald-400" />
+              )}
+              {/* Dimmer left bar for open-but-not-active files */}
+              {!isSelected && isOpenInTab && (
+                <span className="absolute left-0 top-0.5 bottom-0.5 w-0.5 rounded-full bg-emerald-700" />
+              )}
               {node.type === 'directory' ? (
                 <>
                   {isOpen
@@ -76,7 +90,17 @@ function Tree({
                   {fileIcon(node.name)}
                 </>
               )}
-              <span className="truncate font-mono text-xs">{node.name}</span>
+              <span className={cn(
+                'truncate font-mono text-xs',
+                isSelected ? 'text-emerald-300 font-medium' : ''
+              )}>{node.name}</span>
+              {/* Badge: "open" for active, dot for open-in-background */}
+              {isSelected && node.type === 'file' && (
+                <span className="ml-auto pl-2 shrink-0 text-[9px] font-mono text-emerald-500/70 uppercase tracking-wide">open</span>
+              )}
+              {!isSelected && isOpenInTab && (
+                <span className="ml-auto pl-2 shrink-0 h-1.5 w-1.5 rounded-full bg-emerald-700" />
+              )}
             </div>
             {node.type === 'directory' && isOpen && node.children && (
               <Tree
@@ -85,6 +109,7 @@ function Tree({
                 expanded={expanded}
                 toggle={toggle}
                 selected={selected}
+                openPaths={openPaths}
                 onSelect={onSelect}
                 query={query}
               />
@@ -96,9 +121,29 @@ function Tree({
   )
 }
 
-export function FileExplorer({ files, username, repo, selectedPath, onFileSelect }: Props) {
+export function FileExplorer({ files, username, repo, selectedPath, openPaths = [], onFileSelect }: Props) {
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['src', 'public']))
+
+  // Auto-expand all ancestor folders whenever selectedPath changes
+  useEffect(() => {
+    if (!selectedPath) return
+    // e.g. "src/components/AiChat.tsx" → expand "src" and "src/components"
+    const parts = selectedPath.split('/')
+    if (parts.length <= 1) return  // top-level file, nothing to expand
+    const ancestors: string[] = []
+    for (let i = 1; i < parts.length; i++) {
+      ancestors.push(parts.slice(0, i).join('/'))
+    }
+    setExpanded(prev => {
+      // Only update if something is actually missing — avoids unnecessary re-renders
+      const missing = ancestors.filter(a => !prev.has(a))
+      if (missing.length === 0) return prev
+      const next = new Set(prev)
+      missing.forEach(a => next.add(a))
+      return next
+    })
+  }, [selectedPath])
 
   const toggle = (path: string) =>
     setExpanded(prev => {
@@ -132,6 +177,7 @@ export function FileExplorer({ files, username, repo, selectedPath, onFileSelect
           expanded={expanded}
           toggle={toggle}
           selected={selectedPath}
+          openPaths={openPaths}
           onSelect={onFileSelect}
           query={query}
         />

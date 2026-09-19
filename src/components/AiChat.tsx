@@ -13,6 +13,7 @@ import { CodeBlock } from './CodeBlock'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Message {
+  id: string          // stable identity — used to update the right message during streaming
   role: 'user' | 'assistant'
   content: string
   timestamp: string
@@ -26,6 +27,10 @@ interface Props {
   username: string
   repo: string
   selectedFile: string | null
+  onFileSelect?: (path: string) => void
+  // When provided by RepoPage, AiChat skips its own indexing and uses these values
+  externalRagState?: 'idle' | 'indexing' | 'ready' | 'failed'
+  externalChunksCount?: number
 }
 
 type RAGState = 'idle' | 'indexing' | 'ready' | 'failed'
@@ -91,17 +96,33 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
-// ── Source pills ──────────────────────────────────────────────────────────────
-function SourceCitation({ sources }: { sources: string[] }) {
+// ── Source pills — clickable, opens file in middle panel ─────────────────────
+function SourceCitation({ sources, onFileSelect }: { sources: string[]; onFileSelect?: (path: string) => void }) {
   if (!sources.length) return null
   return (
     <div className="mt-3 pt-2.5 border-t border-white/[0.06]">
       <p className="text-[10px] text-zinc-600 mb-1.5 uppercase tracking-wider font-medium">Sources</p>
       <div className="flex flex-wrap gap-1">
         {sources.map(src => (
-          <span key={src} className="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-emerald-500/[0.08] text-emerald-400/80 border border-emerald-500/15">
+          <button
+            key={src}
+            onClick={() => onFileSelect?.(src)}
+            title={src}
+            className={cn(
+              'group flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-md border transition-all',
+              onFileSelect
+                ? 'bg-emerald-500/[0.08] text-emerald-400/80 border-emerald-500/15 hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/40 cursor-pointer'
+                : 'bg-emerald-500/[0.08] text-emerald-400/80 border-emerald-500/15 cursor-default'
+            )}
+          >
+            {onFileSelect && (
+              <svg className="h-2.5 w-2.5 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity" viewBox="0 0 12 12" fill="none">
+                <path d="M2 2h4v1H3v6h6V7h1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" fill="currentColor"/>
+                <path d="M7 2h3v3h-1V3.7L6.4 6.3l-.7-.7L8.3 3H7V2z" fill="currentColor"/>
+              </svg>
+            )}
             {src.split('/').slice(-2).join('/')}
-          </span>
+          </button>
         ))}
       </div>
     </div>
@@ -117,41 +138,78 @@ function StreamingCursor() {
   )
 }
 
-// ── Progress bar inside loading bubble ───────────────────────────────────────
+// ── Terminal-style answer generation indicator ────────────────────────────────
+const CHAT_STEPS = [
+  { key: 'search',   label: 'Searching index...' },
+  { key: 'reading',  label: 'Reading relevant chunks...' },
+  { key: 'assembl',  label: 'Assembling context...' },
+  { key: 'query',    label: 'Querying AI...' },
+]
+
 function LoadingBubble({ progressMsg, chunkFile, chunkHistory }: {
   progressMsg: string
   chunkFile?: string
   chunkHistory: string[]
 }) {
-  // Determine a rough phase for the progress bar width
-  const phase = progressMsg.toLowerCase().includes('search') ? 40
-    : progressMsg.toLowerCase().includes('reading') || progressMsg.toLowerCase().includes('chunk') ? 70
-    : progressMsg.toLowerCase().includes('assembl') || progressMsg.toLowerCase().includes('query') ? 85
-    : 20
+  const msg = progressMsg.toLowerCase()
+
+  // Map the current backend message to a step index (0-based)
+  const currentStep =
+    msg.includes('search') || msg.includes('connect') ? 0
+    : msg.includes('reading') || msg.includes('chunk') ? 1
+    : msg.includes('assembl') ? 2
+    : msg.includes('query') || msg.includes('ai') ? 3
+    : 0
+
+  // Only render steps that have actually been reached — don't show future steps at all
+  const visibleSteps = CHAT_STEPS.slice(0, currentStep + 1)
+  const progress = Math.round(((currentStep + 1) / CHAT_STEPS.length) * 100)
 
   return (
-    <div className="flex flex-col gap-2.5 min-w-[180px] max-w-[260px]">
-      {/* Phase indicator bar */}
-      <div className="w-full h-0.5 bg-zinc-800 rounded-full overflow-hidden">
-        <div
-          className="h-full bg-gradient-to-r from-indigo-500 to-emerald-500 rounded-full transition-all duration-700"
-          style={{ width: `${phase}%` }}
-        />
+    <div className="w-full min-w-[220px] max-w-[300px]">
+      {/* Terminal title bar */}
+      <div className="flex items-center gap-1.5 mb-3">
+        <span className="h-2.5 w-2.5 rounded-full bg-red-500/70" />
+        <span className="h-2.5 w-2.5 rounded-full bg-yellow-500/70" />
+        <span className="h-2.5 w-2.5 rounded-full bg-green-500/70" />
+        <span className="ml-1.5 text-[10px] font-mono text-zinc-600">codebase-intelligence — processing</span>
       </div>
 
-      {/* Status line */}
-      <div className="flex items-center gap-2">
-        <div className="flex gap-0.5 shrink-0">
-          {[0, 120, 240].map(d => (
-            <div key={d} className="h-1.5 w-1.5 bg-indigo-400/60 rounded-full animate-bounce" style={{ animationDelay: `${d}ms` }} />
-          ))}
-        </div>
-        <span className="text-xs text-zinc-400 truncate">{progressMsg || 'Thinking...'}</span>
+      {/* Only show steps that have been reached */}
+      <div className="space-y-2 mb-3">
+        {visibleSteps.map((step, i) => {
+          const done    = i < currentStep
+          const current = i === currentStep
+          return (
+            <div key={step.key} className="flex items-center gap-2">
+              {done ? (
+                <svg className="h-3.5 w-3.5 shrink-0 text-emerald-400" viewBox="0 0 16 16" fill="none">
+                  <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
+                  <path d="M5 8l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              ) : (
+                // Spinning arc — only for the current active step
+                <svg className="h-3.5 w-3.5 shrink-0 text-emerald-400 animate-spin" viewBox="0 0 16 16" fill="none">
+                  <circle cx="8" cy="8" r="7" stroke="currentColor" strokeOpacity="0.2" strokeWidth="1.5" />
+                  <path d="M8 1a7 7 0 0 1 7 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              )}
+              <span className={cn(
+                'text-xs font-mono',
+                done    ? 'text-emerald-400'
+                : current ? 'text-emerald-300'
+                : 'text-zinc-600'
+              )}>
+                {current ? (progressMsg || step.label) : step.label}
+              </span>
+            </div>
+          )
+        })}
       </div>
 
-      {/* Current file */}
+      {/* Current file being read */}
       {chunkFile && (
-        <div className="flex items-center gap-1.5 text-[10px]">
+        <div className="flex items-center gap-1.5 text-[10px] mb-2.5">
           <span className="text-zinc-600 shrink-0">reading</span>
           <span className="font-mono text-emerald-400/70 truncate px-1.5 py-0.5 rounded bg-emerald-500/[0.08] border border-emerald-500/10">
             {chunkFile.split('/').slice(-2).join('/')}
@@ -159,16 +217,30 @@ function LoadingBubble({ progressMsg, chunkFile, chunkHistory }: {
         </div>
       )}
 
-      {/* Visited chunks trail */}
+      {/* Visited files trail */}
       {chunkHistory.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {chunkHistory.slice(-5).map((f, i) => (
+        <div className="flex flex-wrap gap-1 mb-2.5">
+          {chunkHistory.slice(-4).map((f, i) => (
             <span key={i} className="text-[9px] px-1 py-0.5 rounded bg-zinc-800/80 text-zinc-600 border border-zinc-700/50 font-mono">
               ✓ {f}
             </span>
           ))}
         </div>
       )}
+
+      {/* Progress bar */}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[10px] font-mono text-zinc-600">Progress</span>
+          <span className="text-[10px] font-mono text-zinc-500">{progress}%</span>
+        </div>
+        <div className="h-1 w-full rounded-full bg-zinc-800 overflow-hidden">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-700 ease-out"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+      </div>
     </div>
   )
 }
@@ -208,8 +280,9 @@ const QUICK_PROMPTS = [
 ]
 
 // ── Main component ────────────────────────────────────────────────────────────
-export function AiChat({ username, repo, selectedFile }: Props) {
+export function AiChat({ username, repo, selectedFile, onFileSelect, externalRagState, externalChunksCount }: Props) {
   const [messages, setMessages] = useState<Message[]>([{
+    id: 'welcome',
     role: 'assistant',
     content: `Hi! I'm your AI assistant for **${username}/${repo}**.\n\nIndexing the repository now — you can type your question and it will send the moment it's ready.`,
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -230,6 +303,8 @@ export function AiChat({ username, repo, selectedFile }: Props) {
   const pendingQueryRef  = useRef<string | null>(null)
   const indexStartedRef  = useRef(false)
   const streamCtrlRef    = useRef<AbortController | null>(null)
+  // assistantId as a ref — stable string ID used to find/update the streaming message
+  const assistantIdRef   = useRef<string | null>(null)
   // Keep latest messages ref so sendNow closure is never stale
   const messagesRef      = useRef(messages)
   const bottomRef        = useRef<HTMLDivElement>(null)
@@ -254,8 +329,23 @@ export function AiChat({ username, repo, selectedFile }: Props) {
       .catch(() => {})
   }, [])
 
+  // If parent provides RAG state, sync it in and skip self-managed indexing
+  useEffect(() => {
+    if (externalRagState !== undefined) {
+      setRagState(externalRagState)
+    }
+  }, [externalRagState])
+
+  useEffect(() => {
+    if (externalChunksCount !== undefined) {
+      setChunksCount(externalChunksCount)
+    }
+  }, [externalChunksCount])
+
   // ── Indexing ──────────────────────────────────────────────────────────────
   const triggerIndexing = useCallback(() => {
+    // If parent is managing RAG state externally, don't start a second indexing run
+    if (externalRagState !== undefined) return
     if (indexStartedRef.current) return
     indexStartedRef.current = true
     setRagState('indexing')
@@ -268,6 +358,7 @@ export function AiChat({ username, repo, selectedFile }: Props) {
         } else if (res.error?.includes('timed out') || res.error?.includes('waking')) {
           setMessages(prev => [...prev, {
             role: 'assistant',
+            id: `retry-${Date.now()}`,
             content: '⏳ Backend is waking up (free tier). Auto-retrying in 10 seconds...',
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           }])
@@ -290,13 +381,12 @@ export function AiChat({ username, repo, selectedFile }: Props) {
 
   // ── Core send — never stale because it reads from refs ────────────────────
   const sendNow = useCallback((text: string) => {
-    // Guard using ref, not state (avoids stale closure)
     if (!text.trim() || streamingRef.current) return
 
     const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     const currentMessages = messagesRef.current
 
-    setMessages(prev => [...prev, { role: 'user', content: text, timestamp: ts }])
+    setMessages(prev => [...prev, { id: `user-${Date.now()}`, role: 'user', content: text, timestamp: ts }])
     setInput('')
     setInputError(null)
     setLoading(true)
@@ -306,11 +396,12 @@ export function AiChat({ username, repo, selectedFile }: Props) {
     setProgressFile(undefined)
     setChunkHistory([])
 
-    let assistantIdx = -1
+    // Generate a stable ID for the assistant response before any async work
+    const responseId = `assistant-${Date.now()}`
+    assistantIdRef.current = null  // null = message not inserted yet
     let accumulated = ''
     let gotAnyToken = false
 
-    // Cancel any in-flight stream
     streamCtrlRef.current?.abort()
 
     const ctrlStream = askGeminiStream(
@@ -338,29 +429,32 @@ export function AiChat({ username, repo, selectedFile }: Props) {
         onToken(token) {
           accumulated += token
           gotAnyToken = true
-          if (assistantIdx === -1) {
-            // First token — hide loading bubble, create streaming message
+
+          if (assistantIdRef.current === null) {
+            // First token — insert the assistant message using its stable ID
+            assistantIdRef.current = responseId
             setLoading(false)
-            setMessages(prev => {
-              assistantIdx = prev.length
-              return [...prev, {
-                role: 'assistant',
+            setMessages(prev => [
+              ...prev,
+              {
+                id: responseId,
+                role: 'assistant' as const,
                 content: accumulated,
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 streaming: true,
-              }]
-            })
+              },
+            ])
           } else {
-            setMessages(prev => prev.map((m, i) =>
-              i === assistantIdx ? { ...m, content: accumulated, streaming: true } : m
+            // Subsequent tokens — find message by ID, not by index
+            setMessages(prev => prev.map(m =>
+              m.id === responseId ? { ...m, content: accumulated, streaming: true } : m
             ))
           }
         },
 
         onDone(sources, rl) {
-          // Mark message complete (remove streaming cursor)
-          setMessages(prev => prev.map((m, i) =>
-            i === assistantIdx ? { ...m, sources, streaming: false } : m
+          setMessages(prev => prev.map(m =>
+            m.id === responseId ? { ...m, sources, streaming: false } : m
           ))
           setRateLimit(rl)
           setLoading(false)
@@ -373,8 +467,8 @@ export function AiChat({ username, repo, selectedFile }: Props) {
 
           if (!gotAnyToken) {
             if (wasAborted) {
-              // Stopped before any response was generated — show a stopped bubble
               setMessages(prev => [...prev, {
+                id: `stopped-${Date.now()}`,
                 role: 'assistant',
                 content: '',
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -382,18 +476,18 @@ export function AiChat({ username, repo, selectedFile }: Props) {
                 stopped: true,
               }])
             } else {
-              // Network/server error
               setMessages(prev => [...prev, {
+                id: `error-${Date.now()}`,
                 role: 'assistant',
                 content: `⚠️ ${msg}`,
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 streaming: false,
               }])
             }
-          } else if (assistantIdx !== -1) {
-            // Had partial content — mark as stopped
-            setMessages(prev => prev.map((m, i) =>
-              i === assistantIdx ? { ...m, streaming: false, stopped: true } : m
+          } else {
+            // Partial content — mark as stopped via ID
+            setMessages(prev => prev.map(m =>
+              m.id === responseId ? { ...m, streaming: false, stopped: true } : m
             ))
           }
           if (rl) setRateLimit(rl)
@@ -403,9 +497,8 @@ export function AiChat({ username, repo, selectedFile }: Props) {
         },
       }
     )
-    // Keep the returned controller so stopStreaming can abort it
     streamCtrlRef.current = ctrlStream
-  }, [username, repo, selectedFile])  // no messages/streaming in deps — use refs
+  }, [username, repo, selectedFile])
 
   // Fire pending query when indexing completes
   useEffect(() => {
@@ -440,7 +533,7 @@ export function AiChat({ username, repo, selectedFile }: Props) {
       setMessages(prev => {
         // Replace any existing queued message
         const without = prev.filter(m => !m.queued)
-        return [...without, { role: 'user', content: t, timestamp: ts, queued: true }]
+        return [...without, { id: `queued-${Date.now()}`, role: 'user', content: t, timestamp: ts, queued: true }]
       })
       return
     }
@@ -467,6 +560,7 @@ export function AiChat({ username, repo, selectedFile }: Props) {
   }
 
   const retryIndexing = () => {
+    // If external, just re-trigger via local ingest (parent won't interfere after mount)
     indexStartedRef.current = false
     triggerIndexing()
   }
@@ -510,8 +604,8 @@ export function AiChat({ username, repo, selectedFile }: Props) {
 
           {ragState === 'indexing' && !hasPending && <IndexingBanner />}
 
-          {messages.map((m, i) => (
-            <MessageRow key={i} message={m} />
+          {messages.map((m) => (
+            <MessageRow key={m.id} message={m} onFileSelect={onFileSelect} />
           ))}
 
           {hasPending && (
@@ -540,23 +634,29 @@ export function AiChat({ username, repo, selectedFile }: Props) {
       {/* ── Input ─────────────────────────────────────────────────────── */}
       <div className="shrink-0 border-t border-white/[0.06] bg-[#0a0a0f] p-3 space-y-2">
 
-        {/* Quick prompts */}
+        {/* Quick prompts — locked during indexing */}
         <div className="flex gap-1.5 overflow-x-auto scrollbar-hide pb-0.5">
           {QUICK_PROMPTS.map(({ icon, label, prompt }) => (
             <button
               key={label}
+              disabled={ragState === 'indexing' || streaming}
               onClick={() => {
                 const text = selectedFile && label === 'Structure' ? `Explain file contents of: ${selectedFile}` : prompt
                 setInput(text); setInputError(null); inputRef.current?.focus()
               }}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-white/[0.07] bg-white/[0.03] text-[11px] text-zinc-500 hover:text-zinc-300 hover:border-white/[0.12] hover:bg-white/[0.05] whitespace-nowrap transition-all shrink-0"
+              className={cn(
+                'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] whitespace-nowrap transition-all shrink-0',
+                ragState === 'indexing' || streaming
+                  ? 'border-white/[0.04] bg-white/[0.01] text-zinc-700 cursor-not-allowed opacity-50'
+                  : 'border-white/[0.07] bg-white/[0.03] text-zinc-500 hover:text-zinc-300 hover:border-white/[0.12] hover:bg-white/[0.05] cursor-pointer'
+              )}
             >
               {icon}{label}
             </button>
           ))}
         </div>
 
-        {/* Textarea */}
+        {/* Textarea — locked during indexing */}
         <div className={cn(
           'flex items-end gap-2 rounded-xl border px-3 py-2 transition-all duration-200',
           inputError
@@ -564,7 +664,7 @@ export function AiChat({ username, repo, selectedFile }: Props) {
             : streaming
             ? 'border-indigo-500/30 bg-zinc-900/60'
             : ragState === 'indexing'
-            ? 'border-amber-500/20 bg-zinc-900/60 focus-within:border-amber-500/35'
+            ? 'border-amber-500/20 bg-zinc-900/40 opacity-60'
             : 'border-white/[0.08] bg-zinc-900/60 focus-within:border-indigo-500/40 focus-within:bg-zinc-900'
         )}>
           <textarea
@@ -573,13 +673,13 @@ export function AiChat({ username, repo, selectedFile }: Props) {
             onChange={e => { setInput(e.target.value); if (inputError) setInputError(null) }}
             onKeyDown={onKeyDown}
             placeholder={
-              streaming       ? 'Generating response...'
-              : ragState === 'indexing' ? 'Type your question — will send when indexing finishes...'
-              : ragState === 'ready'    ? 'Ask anything about this codebase...'
-              : ragState === 'failed'   ? 'Ask anything (answers from general knowledge)...'
+              ragState === 'indexing' ? '⏳ Indexing repository — please wait...'
+              : streaming             ? 'Generating response...'
+              : ragState === 'ready'  ? 'Ask anything about this codebase...'
+              : ragState === 'failed' ? 'Ask anything (answers from general knowledge)...'
               : 'Ask about this repository...'
             }
-            disabled={streaming}
+            disabled={streaming || ragState === 'indexing'}
             rows={1}
             className="flex-1 min-h-[36px] resize-none bg-transparent border-none outline-none text-sm text-zinc-200 placeholder:text-zinc-700 py-1 leading-5 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ maxHeight: `${6 * 20 + 16}px` }}
@@ -596,13 +696,13 @@ export function AiChat({ username, repo, selectedFile }: Props) {
             ) : (
               <button
                 onClick={() => send(input)}
-                disabled={!input.trim()}
+                disabled={!input.trim() || ragState === 'indexing'}
                 className={cn(
                   'h-8 w-8 rounded-lg flex items-center justify-center transition-all',
-                  input.trim()
-                    ? ragState === 'indexing'
-                      ? 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30'
-                      : 'bg-indigo-500 hover:bg-indigo-400 text-white shadow-sm shadow-indigo-500/25'
+                  ragState === 'indexing'
+                    ? 'bg-white/[0.04] text-zinc-700 cursor-not-allowed'
+                    : input.trim()
+                    ? 'bg-indigo-500 hover:bg-indigo-400 text-white shadow-sm shadow-indigo-500/25'
                     : 'bg-white/[0.04] text-zinc-700 cursor-not-allowed'
                 )}
               >
@@ -621,7 +721,7 @@ export function AiChat({ username, repo, selectedFile }: Props) {
         <p className="text-[10px] text-zinc-700 text-center leading-tight">
           {streaming        ? 'Generating · click ■ to stop'
           : ragState === 'ready'    ? `Grounded in ${chunksCount} chunks · Enter ↵ to send · Shift+Enter for new line`
-          : ragState === 'indexing' ? 'Indexing in background · Enter ↵ to queue'
+          : ragState === 'indexing' ? '⏳ Input locked — waiting for index to complete...'
           : ragState === 'failed'   ? 'Index failed · answering from general knowledge'
           : 'Enter ↵ to send · Shift+Enter for new line'}
         </p>
@@ -631,7 +731,7 @@ export function AiChat({ username, repo, selectedFile }: Props) {
 }
 
 // ── Message row ───────────────────────────────────────────────────────────────
-function MessageRow({ message: m }: { message: Message }) {
+function MessageRow({ message: m, onFileSelect }: { message: Message; onFileSelect?: (path: string) => void }) {
   return (
     <div className={cn('group flex gap-3 px-4 py-1.5', m.role === 'user' ? 'flex-row-reverse' : 'flex-row')}>
 
@@ -764,7 +864,7 @@ function MessageRow({ message: m }: { message: Message }) {
                 </div>
               )}
 
-              {m.sources && m.sources.length > 0 && <SourceCitation sources={m.sources} />}
+              {m.sources && m.sources.length > 0 && <SourceCitation sources={m.sources} onFileSelect={onFileSelect} />}
             </>
           )}
         </div>

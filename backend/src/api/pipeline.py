@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from src.chunking.chunker import build_chunks
 from src.ingestion.loader import fetch_via_github_api
@@ -15,9 +16,27 @@ from src.vectordb.vector_store import (
 
 logger = logging.getLogger(__name__)
 
-# tracks in-progress builds: { "user/repo": asyncio.Task }
-# if a build is already running, new callers await the same task instead of starting a new one
+# tracks in-progress builds: { "user/repo": asyncio.Future }
 _in_progress: dict[str, asyncio.Future] = {}
+
+# short-lived ingest data cache: { "user/repo": (timestamp, data) }
+# collect-repo-data and ingest-rag often fire at the same time (parallel from frontend)
+# whichever arrives first fetches from GitHub; the second reuses the cached result
+# TTL is 60s — just long enough to cover a parallel frontend fetch
+_ingest_cache: dict[str, tuple[float, dict]] = {}
+_INGEST_TTL = 60.0
+
+
+async def _fetch_or_cached(username: str, repo: str) -> dict:
+    """Return ingest data from short-lived cache, or fetch fresh from GitHub."""
+    repo_key = f"{username}/{repo}"
+    entry = _ingest_cache.get(repo_key)
+    if entry and (time.time() - entry[0]) < _INGEST_TTL:
+        logger.info(f"[Pipeline] Reusing cached ingest data for {repo_key}")
+        return entry[1]
+    data = await fetch_via_github_api(username, repo)
+    _ingest_cache[repo_key] = (time.time(), data)
+    return data
 
 
 def _build_pipeline_sync(username: str, repo: str, ingest_data: dict) -> RAGPipeline:
@@ -64,7 +83,7 @@ async def build_pipeline(username: str, repo: str) -> RAGPipeline:
     _in_progress[repo_key] = future
 
     try:
-        ingest_data = await fetch_via_github_api(username, repo)
+        ingest_data = await _fetch_or_cached(username, repo)
         pipeline = await asyncio.to_thread(_build_pipeline_sync, username, repo, ingest_data)
         cache_pipeline(pipeline)
         future.set_result(pipeline)

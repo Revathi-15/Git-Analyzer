@@ -47,12 +47,17 @@ async def fetch_via_github_api(username: str, repo: str) -> dict:
 
     headers = _github_headers()  # read token at call time, not import time
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(
+        timeout=30.0,
+        limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+    ) as client:
 
-        # get repo metadata — we need the default branch name and description
-        r = await client.get(
+        # get repo metadata and file tree in parallel — saves one round-trip
+        meta_task = client.get(
             f"https://api.github.com/repos/{username}/{repo}", headers=headers
         )
+        # We need branch name before fetching tree, so fetch meta first (fast — no body)
+        r = await meta_task
         r.raise_for_status()
         repo_info = r.json()
         branch = repo_info.get("default_branch", "main")
@@ -87,13 +92,14 @@ async def fetch_via_github_api(username: str, repo: str) -> dict:
         and item.get("size", 0) < 200_000                                   # skip large/minified files
     ]  # no cap — index the whole repo
 
-    # fetch file contents — 25 files at a time in parallel for speed
+    # fetch file contents — reuse a single client for all batches (avoids reconnect overhead)
+    # 50 files per batch → fewer round-trips, faster on repos with many files
     content_parts: list[str] = []
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        for i in range(0, len(blob_paths), 25):
-            batch = blob_paths[i : i + 25]
+    async with httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_connections=50, max_keepalive_connections=20)) as client:
+        for i in range(0, len(blob_paths), 50):
+            batch = blob_paths[i : i + 50]
 
-            # fire all 10 requests at the same time
+            # fire all requests in the batch simultaneously
             tasks = [
                 client.get(
                     f"https://api.github.com/repos/{username}/{repo}/contents/{path}",

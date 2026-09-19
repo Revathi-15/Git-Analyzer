@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 
 from src.ingestion.loader import fetch_github_content, fetch_via_github_api, _github_headers
 from src.utils.helpers import IngestRequest
+from src.api.pipeline import _fetch_or_cached
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -42,7 +43,7 @@ async def collect_repo_data(payload: dict) -> dict:
         raise HTTPException(status_code=400, detail="username and repo are required")
 
     try:
-        data = await fetch_via_github_api(username, repo)
+        data = await _fetch_or_cached(username, repo)
         return {"success": True, "data": data}
     except Exception as exc:
         logger.warning(f"[RepoRoutes] collect-repo-data failed: {exc} — returning fallback")
